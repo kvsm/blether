@@ -3,6 +3,7 @@ import {
   IdentityError,
   RelayFrame,
   TeamError,
+  compareLogs,
   parseFrame,
   signChallenge,
   verifyIdentityLog,
@@ -12,6 +13,7 @@ import {
   type DeliveryStatus,
   type ErrorCode,
   type Identity,
+  type IdentityLog,
   type Message,
   type SentMessage,
   type SignedTeamEntry,
@@ -19,7 +21,11 @@ import {
   type TeamLog,
 } from "@blether/protocol";
 import { WebSocket } from "ws";
-import type { Credentials } from "./keystore.js";
+import {
+  StaleLogError,
+  type Credentials,
+  type LogWitness,
+} from "./keystore.js";
 
 /** The relay refused something, or its answer didn't verify. */
 export class RelayError extends Error {
@@ -43,6 +49,18 @@ export interface VerifiedTeam {
   team: Team;
   log: TeamLog;
   identities: Map<string, Identity>;
+}
+
+export interface ConnectOptions {
+  /** The team and agent to act as. Omit for a CLI session. */
+  scope?: AgentScope;
+  /** Checks logs from the relay against what this device has seen before. */
+  witness?: LogWitness;
+}
+
+interface Welcome {
+  developer: string;
+  identity: IdentityLog;
 }
 
 /** The team and agent a bridge session acts as. */
@@ -75,14 +93,21 @@ export class RelayConnection {
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
   private readonly teamRequests = new Map<string, Pending<TeamReply>>();
   private challenge: Pending<string> | undefined;
-  private welcome: Pending<string> | undefined;
+  private welcome: Pending<Welcome> | undefined;
   /** The authenticated developer's identity id, once the relay has welcomed this session. */
   developer: string | undefined;
+  /**
+   * The newest verified version of the developer's identity log, once
+   * welcomed. It's longer than the one this device holds if another of the
+   * developer's devices has added a device since; callers should save it.
+   */
+  identity: IdentityLog | undefined;
   private readonly arrivalListeners = new Set<(message: Message) => void>();
 
   private constructor(
     private readonly socket: WebSocket,
     readonly scope: AgentScope | undefined,
+    private readonly witness: LogWitness | undefined,
   ) {
     socket.on("message", (data) => this.receive(data.toString()));
     socket.on("close", () => {
@@ -116,16 +141,16 @@ export class RelayConnection {
   static async connect(
     url: string,
     credentials: Credentials,
-    scope?: AgentScope,
+    { scope, witness }: ConnectOptions = {},
   ): Promise<RelayConnection> {
     const socket = new WebSocket(url);
     // Attach the frame handler at once: the relay sends its challenge as soon
     // as the connection opens, and pending messages straight after welcome.
-    const connection = new RelayConnection(socket, scope);
+    const connection = new RelayConnection(socket, scope, witness);
     const challenged = new Promise<string>((resolve, reject) => {
       connection.challenge = { resolve, reject };
     });
-    const welcomed = new Promise<string>((resolve, reject) => {
+    const welcomed = new Promise<Welcome>((resolve, reject) => {
       connection.welcome = { resolve, reject };
     });
     // Avoid unhandled rejections if the socket fails before we await these.
@@ -145,7 +170,12 @@ export class RelayConnection {
         device: credentials.device.publicKey,
         signature: signChallenge(credentials.device, challenge, scope ?? {}),
       });
-      connection.developer = await welcomed;
+      const welcome = await welcomed;
+      connection.identity = connection.checkOwnIdentity(
+        credentials.identity,
+        welcome.identity,
+      );
+      connection.developer = welcome.developer;
     } catch (error) {
       socket.close();
       throw error;
@@ -197,7 +227,7 @@ export class RelayConnection {
       requestId,
       log,
     });
-    return verifyReply(reply);
+    return this.verifyReply(reply);
   }
 
   /** Fetches team `id`'s log and verifies it. */
@@ -208,7 +238,7 @@ export class RelayConnection {
       requestId,
       team: id,
     });
-    return verifyReply(reply, id);
+    return this.verifyReply(reply, id);
   }
 
   /** Appends `entry` to team `id`'s log, returning the verified result. */
@@ -220,7 +250,55 @@ export class RelayConnection {
       team: id,
       entry,
     });
-    return verifyReply(reply, id);
+    return this.verifyReply(reply, id);
+  }
+
+  /**
+   * Checks the identity log the relay returned on welcome: it must be this
+   * developer's, and the same as or newer than the one this device holds.
+   */
+  private checkOwnIdentity(
+    local: IdentityLog,
+    fromRelay: IdentityLog,
+  ): IdentityLog {
+    return untrusted(() => {
+      const mine = verifyIdentityLog(local);
+      const theirs = verifyIdentityLog(fromRelay);
+      const relation = compareLogs(fromRelay, local);
+      if (
+        theirs.id !== mine.id ||
+        relation === "behind" ||
+        relation === "diverged"
+      ) {
+        throw new IdentityError(
+          "The relay's copy of your identity doesn't match this device's.",
+        );
+      }
+      this.witness?.witness("identity", mine.id, fromRelay);
+      return fromRelay;
+    });
+  }
+
+  /**
+   * Verifies a team log the relay sent, rather than trusting the relay: every
+   * identity and entry is checked, the team must be the one asked for, and no
+   * log may be older than one this device has already seen.
+   */
+  private verifyReply(reply: TeamReply, expectedId?: string): VerifiedTeam {
+    return untrusted(() => {
+      const identities = new Map<string, Identity>();
+      for (const log of reply.identities) {
+        const identity = verifyIdentityLog(log);
+        this.witness?.witness("identity", identity.id, log as unknown[]);
+        identities.set(identity.id, identity);
+      }
+      const team = verifyTeamLog(reply.log, identities);
+      if (expectedId && team.id !== expectedId) {
+        throw new TeamError("The relay sent a different team's log.");
+      }
+      this.witness?.witness("team", team.id, reply.log);
+      return { team, log: reply.log, identities };
+    });
   }
 
   /** Disconnects from the relay, resolving once the connection has closed. */
@@ -261,7 +339,7 @@ export class RelayConnection {
         this.challenge = undefined;
         return;
       case "welcome":
-        this.welcome?.resolve(frame.developer);
+        this.welcome?.resolve(frame);
         this.welcome = undefined;
         return;
       case "deliver":
@@ -300,27 +378,19 @@ export class RelayConnection {
   }
 }
 
-/**
- * Verifies a team log the relay sent, rather than trusting the relay: every
- * identity and every entry is checked, and the team must be the one asked for.
- */
-function verifyReply(reply: TeamReply, expectedId?: string): VerifiedTeam {
+/** Runs `check`, reporting anything that doesn't verify as an untrusted reply from the relay. */
+function untrusted<T>(check: () => T): T {
   try {
-    const identities = new Map<string, Identity>();
-    for (const log of reply.identities) {
-      const identity = verifyIdentityLog(log);
-      identities.set(identity.id, identity);
-    }
-    const team = verifyTeamLog(reply.log, identities);
-    if (expectedId && team.id !== expectedId) {
-      throw new TeamError("The relay sent a different team's log.");
-    }
-    return { team, log: reply.log, identities };
+    return check();
   } catch (error) {
-    if (error instanceof TeamError || error instanceof IdentityError) {
+    if (
+      error instanceof TeamError ||
+      error instanceof IdentityError ||
+      error instanceof StaleLogError
+    ) {
       throw new RelayError(
         "untrusted-reply",
-        `The relay's copy of the team doesn't verify: ${error.message}`,
+        `The relay's reply doesn't verify: ${error.message}`,
       );
     }
     throw error;

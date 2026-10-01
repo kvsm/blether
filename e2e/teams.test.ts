@@ -51,7 +51,7 @@ function device(root: string, name: string) {
       const connection = await RelayConnection.connect(
         record.relayUrl,
         store.load()!,
-        { team: record.id, agent },
+        { scope: { team: record.id, agent } },
       );
       const client = new Client({ name: agent, version: "0.0.0" });
       const [a, b] = InMemoryTransport.createLinkedPair();
@@ -190,8 +190,7 @@ describe("teams through the blether CLI", () => {
     const record = kev.teams.get("backend")!;
 
     const attempt = RelayConnection.connect(relay.url, mallory.store.load()!, {
-      team: record.id,
-      agent: "api",
+      scope: { team: record.id, agent: "api" },
     });
 
     await expect(attempt).rejects.toMatchObject({ code: "not-a-member" });

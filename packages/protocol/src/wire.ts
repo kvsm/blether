@@ -107,6 +107,7 @@ export const ErrorCode = z.enum([
   "team-rejected",
   "team-conflict",
   "no-agent",
+  "identity-conflict",
   "not-introduced",
   "already-introduced",
   "agent-in-use",
@@ -125,6 +126,12 @@ export const RelayFrame = z.discriminatedUnion("type", [
     agent: AgentName.optional(),
     /** The authenticated developer's identity id. */
     developer: z.string(),
+    /**
+     * The longest version of the developer's identity log the relay holds,
+     * which may be newer than the one the hello carried (another device may
+     * have added a device since).
+     */
+    identity: IdentityLog,
   }),
   /** The relay accepted the `send` frame with this id. */
   z.object({

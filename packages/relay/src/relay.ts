@@ -3,6 +3,7 @@ import {
   ClientFrame,
   IdentityError,
   TeamError,
+  compareLogs,
   parseFrame,
   randomToken,
   verifyChallenge,
@@ -136,6 +137,25 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           refuse("authentication-failed", error.message);
           return;
         }
+        // Keep the longest version of the identity log: a device that hasn't
+        // heard about a newer entry presents an older prefix, and two
+        // versions that disagree mean someone has forked the identity.
+        let identityLog = frame.identity;
+        const stored = store.developerLog(identity.id);
+        if (stored) {
+          const relation = compareLogs(frame.identity, stored);
+          if (relation === "diverged") {
+            refuse(
+              "identity-conflict",
+              "This identity log disagrees with the copy the relay holds.",
+            );
+            return;
+          }
+          if (relation === "behind") {
+            identityLog = stored;
+            identity = verifyIdentityLog(stored);
+          }
+        }
         if (
           !identity.devices.includes(frame.device) ||
           !verifyChallenge(
@@ -151,7 +171,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           );
           return;
         }
-        store.saveDeveloper(identity, frame.identity);
+        store.saveDeveloper(identity, identityLog);
 
         if (frame.team && frame.agent) {
           const requested = { team: frame.team, agent: frame.agent };
@@ -188,6 +208,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
         send({
           type: "welcome",
           developer: identity.id,
+          identity: identityLog,
           ...(scope ? { team: scope.team, agent: scope.agent } : {}),
         });
         if (scope) {

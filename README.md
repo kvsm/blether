@@ -36,6 +36,8 @@ blether invite backend                 # prints a one-use invite, valid for 72 h
 
 Send the invite to a teammate privately. They run `blether init` once, then `blether join <invite>`. `blether team members backend` shows who's in the team.
 
+To use Blether on another of your own devices, don't run `blether init` there. Run `blether device request` on the new device, `blether device add <request>` on one that already has your identity (check the fingerprints match), then `blether device accept <grant>` back on the new device. It gets your identity and your list of teams.
+
 Add the bridge to each agent's MCP config, with the team and a different `BLETHER_AGENT` per session:
 
 ```json

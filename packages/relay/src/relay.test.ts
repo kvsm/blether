@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   RelayFrame,
   acceptInvite,
+  addDevice,
   createIdentity,
   createInvite,
   createTeam,
@@ -239,6 +240,7 @@ describe("relay", () => {
         team: ctx.team.id,
         agent: "web",
         developer: alice.signer.identity.id,
+        identity: alice.identity,
       });
     });
 
@@ -248,6 +250,7 @@ describe("relay", () => {
       expect(await session.hello({})).toEqual({
         type: "welcome",
         developer: alice.signer.identity.id,
+        identity: alice.identity,
       });
     });
 
@@ -295,7 +298,7 @@ describe("relay", () => {
 
     it("refuses a tampered identity log", async () => {
       const forged = structuredClone(alice.identity);
-      forged[0]!.entry.name = "Mallory";
+      (forged[0]!.entry as { name: string }).name = "Mallory";
       const web = await connect();
 
       expect(
@@ -668,6 +671,56 @@ describe("relay", () => {
         three.id,
         two.id,
       ]);
+    });
+  });
+});
+
+describe("relay identity updates", () => {
+  const { ctx, connect } = useRelay();
+  const inTeam = (agent: string) => ({ team: ctx.team.id, agent });
+
+  /** Alice's identity with one more device, as that device's credentials. */
+  function withNewDevice(log: IdentityLog = alice.identity): Developer {
+    const device = generateDeviceKey();
+    const identity = addDevice(log, alice.device, device.publicKey);
+    return {
+      device,
+      identity,
+      signer: { device, identity: verifyIdentityLog(identity) },
+    };
+  }
+
+  it("lets a newly added device act as its developer's agents", async () => {
+    const laptop = withNewDevice();
+    const session = await connect();
+
+    expect(await session.sayHello(inTeam("web"), laptop)).toMatchObject({
+      type: "welcome",
+      developer: alice.signer.identity.id,
+      identity: laptop.identity,
+    });
+  });
+
+  it("gives a device that presents an older identity log the newest one", async () => {
+    const laptop = withNewDevice();
+    await (await connect()).hello({}, laptop);
+
+    const desktop = await connect();
+    const welcome = await desktop.hello({}, alice);
+
+    expect(welcome.identity).toEqual(laptop.identity);
+  });
+
+  it("refuses an identity log that diverges from the one it holds", async () => {
+    const laptop = withNewDevice();
+    const phone = withNewDevice();
+    await (await connect()).hello({}, laptop);
+
+    const session = await connect();
+
+    expect(await session.sayHello({}, phone)).toMatchObject({
+      type: "error",
+      code: "identity-conflict",
     });
   });
 });
