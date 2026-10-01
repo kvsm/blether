@@ -38,6 +38,13 @@ import {
   type Credentials,
   type TeamRecord,
 } from "./keystore.js";
+import {
+  INCOMING_DESCRIPTIONS,
+  IncomingLevel,
+  OUTGOING_DESCRIPTIONS,
+  OutgoingLevel,
+  PolicyStore,
+} from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 
 /**
@@ -66,6 +73,10 @@ Commands:
   agent roles <team> <name> [--role <r>]...
                                      Replace the roles of one of your agents
   agent list <team>                  Show the team's agents and who is online
+  policy                             Show your Approval Policy on this device
+  policy set [--outgoing <level>] [--incoming <level>]
+                                     outgoing: ask | ask-others | free
+                                     incoming: ask | ask-impactful | free
 
 Set BLETHER_HOME to keep Blether's files somewhere other than ~/.blether.`;
 
@@ -136,6 +147,12 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       throw new CliError(
         `Unknown team command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
+    }
+    case "policy": {
+      const [sub, ...args] = rest;
+      if (sub === undefined) return policyShow(ctx);
+      if (sub === "set") return policySet(args, ctx);
+      throw new CliError(`Unknown policy command: ${sub}\n\n${USAGE}`);
     }
     case "role": {
       const [sub, ...args] = rest;
@@ -489,6 +506,50 @@ async function invite(args: string[], ctx: CliContext): Promise<number> {
   ctx.io.out(
     `To cancel it: blether revoke-invite ${record.name} ${created.invite}`,
   );
+  return 0;
+}
+
+function policyShow({ store, io }: CliContext): number {
+  const policy = new PolicyStore(store.home).load();
+  io.out(
+    `Outgoing: ${policy.outgoing} (${OUTGOING_DESCRIPTIONS[policy.outgoing]})`,
+  );
+  io.out(
+    `Incoming: ${policy.incoming} (${INCOMING_DESCRIPTIONS[policy.incoming]})`,
+  );
+  io.out(
+    "Outgoing approval is enforced by the bridge, which asks you through your agent's host. " +
+      "Incoming approval is guidance given to your agent with each message; your host's own permission settings are what actually stop it acting.",
+  );
+  return 0;
+}
+
+function policySet(args: string[], ctx: CliContext): number {
+  const { values } = parseArgs({
+    args,
+    options: {
+      outgoing: { type: "string" },
+      incoming: { type: "string" },
+    },
+  });
+  if (values.outgoing === undefined && values.incoming === undefined) {
+    throw new CliError(
+      "Say what to change: blether policy set --outgoing <ask|ask-others|free> --incoming <ask|ask-impactful|free>",
+    );
+  }
+  const policies = new PolicyStore(ctx.store.home);
+  const current = policies.load();
+  const outgoing = OutgoingLevel.safeParse(values.outgoing ?? current.outgoing);
+  const incoming = IncomingLevel.safeParse(values.incoming ?? current.incoming);
+  if (!outgoing.success) {
+    throw new CliError("--outgoing must be ask, ask-others or free.");
+  }
+  if (!incoming.success) {
+    throw new CliError("--incoming must be ask, ask-impactful or free.");
+  }
+  policies.save({ outgoing: outgoing.data, incoming: incoming.data });
+  policyShow(ctx);
+  ctx.io.out("Restart your agent sessions for the change to take effect.");
   return 0;
 }
 

@@ -67,6 +67,17 @@ The agent gets four tools: `list_agents` (the roster), `send_message`, `read_mai
 
 Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from earlier dev builds can't be upgraded; move them aside.
 
+### Approval Policy
+
+By default your agents ask you before sending any message, and are told to ask you before acting on any request they receive. See it with `blether policy` and change it with:
+
+```sh
+blether policy set --outgoing ask-others     # ask only before messaging other developers' agents
+blether policy set --incoming ask-impactful  # let agents act on low-impact requests
+```
+
+Outgoing approval is enforced by the bridge: it shows you each message through your agent's host (MCP elicitation) and only sends it if you approve. If your host can't show the prompt, sends are refused until you relax `--outgoing`. Incoming approval is guidance given to your agent with every message; your host's own permission settings are what actually stop an agent acting. The policy is stored per device, in `~/.blether/policy.json`.
+
 ### Push delivery in Claude Code (channels)
 
 Without push, an agent only sees new messages when it reads its mailbox. In Claude Code, the bridge can also wake the session when a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference), which are a research preview. The bridge sends a short notice ("New Blether message from web…"), never the message itself, and Claude then reads its mailbox as usual.

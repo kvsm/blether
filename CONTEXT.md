@@ -67,7 +67,7 @@ _Avoid_: Server, broker, hub
 ### Safety
 
 **Approval Policy**:
-A developer's setting for how much their agents may send (outgoing) and act on (incoming) without asking them first. Each direction has its own level, and both start at the strictest.
+A developer's setting for how much their agents may send (outgoing) and act on (incoming) without asking them first. Each direction has its own level, and both start at the strictest. Outgoing approval is asked of the developer directly; incoming approval is guidance to the agent, since only the agent's host can stop it acting. For now each device keeps its own policy.
 _Avoid_: Permissions, trust level
 
 **Escalation**:

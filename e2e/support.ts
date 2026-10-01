@@ -5,9 +5,13 @@ import {
   TeamDirectory,
   createBridgeServer,
   runCli,
+  type ApprovalPolicy,
 } from "@blether/bridge";
 import { verifyIdentityLog } from "@blether/protocol";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import {
+  Client,
+  type ClientOptions,
+} from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 /**
@@ -67,22 +71,33 @@ export function device(root: string, name: string) {
     devices: () => verifyIdentityLog(store.load()!.identity).devices.length,
 
     /** An MCP session, through a bridge, acting as one of this developer's agents in `team`. */
-    async session(team: string, agent: string) {
+    async session(
+      team: string,
+      agent: string,
+      {
+        policy = { outgoing: "free", incoming: "free" },
+        client: clientOptions,
+      }: { policy?: ApprovalPolicy; client?: ClientOptions } = {},
+    ) {
       const record = teams.get(team)!;
       const connection = await RelayConnection.connect(
         record.relayUrl,
         store.load()!,
         { scope: { team: record.id, agent } },
       );
-      const client = new Client({ name: agent, version: "0.0.0" });
+      const client = new Client(
+        { name: agent, version: "0.0.0" },
+        clientOptions,
+      );
       const [a, b] = InMemoryTransport.createLinkedPair();
-      await createBridgeServer(connection).connect(b);
+      await createBridgeServer(connection, { policy }).connect(b);
       await client.connect(a);
       const call = async (tool: string, args: Record<string, unknown> = {}) => {
         const result = await client.callTool({ name: tool, arguments: args });
         return (result.content as { text: string }[])[0]?.text ?? "";
       };
       return {
+        client,
         call,
         close: async () => {
           await client.close();

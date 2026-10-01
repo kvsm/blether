@@ -7,6 +7,7 @@ import {
   SeenLogs,
   TeamDirectory,
 } from "./keystore.js";
+import { PolicyStore } from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer } from "./server.js";
 
@@ -67,5 +68,7 @@ const relay = await RelayConnection.connect(team.relayUrl, credentials, {
 if (relay.identity && relay.identity.length > credentials.identity.length) {
   store.saveIdentity(relay.identity);
 }
-const server = createBridgeServer(relay);
+const server = createBridgeServer(relay, {
+  policy: new PolicyStore(store.home).load(),
+});
 await server.connect(new StdioServerTransport());

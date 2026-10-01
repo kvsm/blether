@@ -27,6 +27,8 @@ const ChannelNotice = z.object({
 });
 type ChannelNotice = z.infer<typeof ChannelNotice>["params"];
 
+const FREE = { outgoing: "free", incoming: "free" } as const;
+
 /** One developer, in one team, owns every agent in these tests. */
 const device = generateDeviceKey();
 const credentials = { device, identity: createIdentity(device, "Kev") };
@@ -68,7 +70,8 @@ async function connectAs(relay: Relay, agent: string) {
 /** An agent session: an MCP client talking to its own bridge, which is connected to the relay. */
 async function startSession(relay: Relay, agent: string) {
   const connection = await connectAs(relay, agent);
-  const server = createBridgeServer(connection);
+  // These tests are about messaging, not approval: send and act freely.
+  const server = createBridgeServer(connection, { policy: FREE });
   const client = new Client({ name: `${agent}-session`, version: "0.0.0" });
   // Record channel notices the way Claude Code would receive them.
   const notices: ChannelNotice[] = [];
