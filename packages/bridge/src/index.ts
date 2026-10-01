@@ -54,3 +54,4 @@ export {
   SendLimiter,
   type SendLimits,
 } from "./rate-limit.js";
+export { SentLog, type SentRecord } from "./sent-log.js";

@@ -53,6 +53,10 @@ export const MessagePayload = z.object({
    * ordinary message.
    */
   kind: z.enum(["hold-notice"]).optional(),
+  /** The message this replies to. */
+  inReplyTo: z.uuid().optional(),
+  /** The thread it belongs to: the id of the message that started it. Absent for a message that starts one. */
+  thread: z.uuid().optional(),
   body: z.string().min(1),
   /** When the sender sent it, by the sender's clock. */
   sentAt: z.iso.datetime(),

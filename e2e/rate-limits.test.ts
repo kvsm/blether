@@ -11,7 +11,7 @@ import { device, type Device } from "./support.js";
 const TIGHT: ApprovalPolicy = {
   outgoing: "free",
   incoming: "free",
-  limits: { perAgent: 5, perRecipient: 3, windowMinutes: 10 },
+  limits: { perAgent: 5, perRecipient: 3, perThread: 10, windowMinutes: 10 },
 };
 
 describe("sending limits", () => {
@@ -175,10 +175,11 @@ describe("sending limits", () => {
     expect(new PolicyStore(kev.store.home).load().limits).toEqual({
       perAgent: 30,
       perRecipient: 20,
+      perThread: 10,
       windowMinutes: 5,
     });
     expect((await kev.run("policy")).out).toContain(
-      "Limits:   30 messages per agent and 20 to any one agent, per 5 minutes",
+      "Limits:   30 messages per agent, 20 to any one agent and 10 in any one thread, per 5 minutes",
     );
     expect(
       (await kev.run("policy", "set", "--limit-per-agent", "0")).err,

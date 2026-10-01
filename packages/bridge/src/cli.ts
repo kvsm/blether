@@ -80,7 +80,8 @@ Commands:
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
   policy set [--outgoing <level>] [--incoming <level>]
-             [--limit-per-agent <n>] [--limit-per-recipient <n>] [--limit-window <minutes>]
+             [--limit-per-agent <n>] [--limit-per-recipient <n>]
+             [--limit-per-thread <n>] [--limit-window <minutes>]
                                      outgoing: ask | ask-others | free
                                      incoming: ask | ask-impactful | free
                                      limits: most messages an agent sends in the window
@@ -566,7 +567,7 @@ function policyShow({ store, io }: CliContext): number {
   );
   const limits = policy.limits ?? DEFAULT_SEND_LIMITS;
   io.out(
-    `Limits:   ${limits.perAgent} messages per agent and ${limits.perRecipient} to any one agent, per ${limits.windowMinutes} minutes`,
+    `Limits:   ${limits.perAgent} messages per agent, ${limits.perRecipient} to any one agent and ${limits.perThread} in any one thread, per ${limits.windowMinutes} minutes`,
   );
   io.out(
     "Outgoing approval is enforced by the bridge, which asks you through your agent's host. " +
@@ -583,6 +584,7 @@ function policySet(args: string[], ctx: CliContext): number {
       incoming: { type: "string" },
       "limit-per-agent": { type: "string" },
       "limit-per-recipient": { type: "string" },
+      "limit-per-thread": { type: "string" },
       "limit-window": { type: "string" },
     },
   });
@@ -620,6 +622,11 @@ function policySet(args: string[], ctx: CliContext): number {
       "limit-per-recipient",
       values["limit-per-recipient"],
       currentLimits.perRecipient,
+    ),
+    perThread: limit(
+      "limit-per-thread",
+      values["limit-per-thread"],
+      currentLimits.perThread,
     ),
     windowMinutes: limit(
       "limit-window",
