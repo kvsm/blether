@@ -319,6 +319,11 @@ export class RelayConnection {
     return items;
   }
 
+  /** The identity id of the developer who owns agent `name` in the verified team log. */
+  async ownerOf(name: string): Promise<string | undefined> {
+    return (await this.findAgent(name))?.agent.owner;
+  }
+
   /** Resolves once every delivery received so far has been decrypted and verified. */
   settled(): Promise<void> {
     return this.inbox;
