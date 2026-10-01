@@ -38,9 +38,11 @@ const DeviceKeyFile = z.object({
 /** `BLETHER_HOME` was written by an earlier dev build whose files this one can't read. */
 export class OutdatedBletherHomeError extends Error {
   constructor(home: string) {
+    // Forward slashes work in every shell, including Git Bash on Windows.
+    const path = home.replaceAll("\\", "/");
     super(
       `${home} was created by an earlier development build of Blether and can't be read. ` +
-        `Move it aside (mv ${home} ${home}.old) and run \`blether init\` again.`,
+        `Move it aside (mv "${path}" "${path}.old") and run \`blether init\` again.`,
     );
     this.name = "OutdatedBletherHomeError";
   }

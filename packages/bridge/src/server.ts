@@ -32,6 +32,32 @@ const INSTRUCTIONS =
 export const CLAUDE_CHANNEL = "claude/channel";
 export const CLAUDE_CHANNEL_NOTIFICATION = "notifications/claude/channel";
 
+/**
+ * The MCP server a bridge runs when it can't start: no messaging tools, just
+ * an explanation of `problem` the agent can pass on to its developer.
+ */
+export function createSetupProblemServer(problem: string): McpServer {
+  const explanation = `Blether isn't working in this session: ${problem}`;
+  const server = new McpServer(
+    { name: "blether", version: "0.0.0" },
+    {
+      instructions:
+        `${explanation} Blether's messaging tools are unavailable until this is fixed. ` +
+        "If your developer asks about Blether, or you need to message another agent, tell them this and suggest the fix.",
+    },
+  );
+  server.registerTool(
+    "blether_status",
+    {
+      title: "Blether status",
+      description:
+        "Explains why Blether isn't working in this session and how to fix it.",
+    },
+    () => text(explanation),
+  );
+  return server;
+}
+
 export interface BridgeOptions {
   /** The developer's Approval Policy. Defaults to the strictest. */
   policy?: ApprovalPolicy;

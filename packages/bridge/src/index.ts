@@ -19,6 +19,7 @@ export {
   CLAUDE_CHANNEL,
   CLAUDE_CHANNEL_NOTIFICATION,
   createBridgeServer,
+  createSetupProblemServer,
   type BridgeOptions,
 } from "./server.js";
 export { runCli, type CliContext, type CliIo } from "./cli.js";
@@ -35,3 +36,4 @@ export {
   type Credentials,
   type TeamRecord,
 } from "./keystore.js";
+export { startBridge, type StartedBridge } from "./startup.js";
