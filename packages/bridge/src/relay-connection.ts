@@ -135,6 +135,8 @@ export class RelayConnection {
   private readonly unread: MailboxItem[] = [];
   /** Ids of every message received, so redeliveries after reconnecting are ignored. */
   private readonly seen = new Set<string>();
+  /** Messages read in this session, so they can be referred to later (e.g. to escalate). */
+  private readonly readThisSession = new Map<string, ReceivedMessage>();
   /** Deliveries are decrypted and verified one at a time, in order. */
   private inbox: Promise<void> = Promise.resolve();
   /** The team log as last verified, refreshed when it's missing something. */
@@ -313,10 +315,18 @@ export class RelayConnection {
       .filter((item) => item.kind === "message" || item.reason === "rejected")
       .map((item) => item.id);
     this.readMessages?.add(read);
+    for (const item of items) {
+      if (item.kind === "message") this.readThisSession.set(item.id, item);
+    }
     if (read.length > 0 && this.socket.readyState === WebSocket.OPEN) {
       this.write({ type: "read", ids: read });
     }
     return items;
+  }
+
+  /** A message read earlier in this session, by id. */
+  readMessage(id: string): ReceivedMessage | undefined {
+    return this.readThisSession.get(id);
   }
 
   /** The identity id of the developer who owns agent `name` in the verified team log. */

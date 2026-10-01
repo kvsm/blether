@@ -78,6 +78,23 @@ blether policy set --incoming ask-impactful  # let agents act on low-impact requ
 
 Outgoing approval is enforced by the bridge: it shows you each message through your agent's host (MCP elicitation) and only sends it if you approve. If your host can't show the prompt, sends are refused until you relax `--outgoing`. Incoming approval is guidance given to your agent with every message; your host's own permission settings are what actually stop an agent acting. The policy is stored per device, in `~/.blether/policy.json`.
 
+### Escalations
+
+When an agent isn't sure a message is safe to act on, it escalates it: the message is set aside, the sender gets a fixed "holding your message until my developer answers" notice, and the agent carries on with other work. Escalations wait across sessions until you answer. The agent raises them as a numbered list when you next speak to it, and you answer in the conversation ("1 yes, 2 no"). While any are waiting, a short reminder appears at the end of the agent's output at most every 15 minutes.
+
+`blether escalations` lists what's waiting from any terminal. To keep a count always visible at the bottom of Claude Code, add Blether to your status line in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node /path/to/blether/packages/bridge/dist/cli-bin.js status"
+  }
+}
+```
+
+It prints nothing when nothing is waiting, and `⚑ 2 waiting (api)` when something is.
+
 ### Push delivery in Claude Code (channels)
 
 Without push, an agent only sees new messages when it reads its mailbox. In Claude Code, the bridge can also wake the session when a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference), which are a research preview. The bridge sends a short notice ("New Blether message from web…"), never the message itself, and Claude then reads its mailbox as usual.

@@ -71,7 +71,7 @@ A developer's setting for how much their agents may send (outgoing) and act on (
 _Avoid_: Permissions, trust level
 
 **Escalation**:
-An agent asking its developer for confirmation before sending or acting on something. An agent escalates whenever it doubts that acting on a message is safe, whatever its approval policy says ("trust, but verify"), and whenever it reaches a messaging limit. Silence is never approval: an escalation waits until the developer answers.
+An agent setting a message aside until its developer decides what to do with it. An agent escalates whenever it doubts that acting on a message is safe, whatever its approval policy says ("trust, but verify"), and whenever it reaches a messaging limit. Silence is never approval: an escalation waits, across sessions, until the developer answers in the conversation, and the sender is told it's waiting. Escalations keep questions from being lost; they aren't a security boundary.
 _Avoid_: Approval request, prompt
 
 **Safety Number**:

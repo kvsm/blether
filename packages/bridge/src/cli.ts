@@ -38,6 +38,8 @@ import {
   type Credentials,
   type TeamRecord,
 } from "./keystore.js";
+import { formatEscalations } from "./escalation-tools.js";
+import { allPendingEscalations } from "./escalations.js";
 import {
   INCOMING_DESCRIPTIONS,
   IncomingLevel,
@@ -73,6 +75,8 @@ Commands:
   agent roles <team> <name> [--role <r>]...
                                      Replace the roles of one of your agents
   agent list <team>                  Show the team's agents and who is online
+  escalations                        List messages your agents are holding for your decision
+  status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
   policy set [--outgoing <level>] [--incoming <level>]
                                      outgoing: ask | ask-others | free
@@ -148,6 +152,10 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
         `Unknown team command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
     }
+    case "escalations":
+      return escalationsList(ctx);
+    case "status":
+      return status(ctx);
     case "policy": {
       const [sub, ...args] = rest;
       if (sub === undefined) return policyShow(ctx);
@@ -506,6 +514,42 @@ async function invite(args: string[], ctx: CliContext): Promise<number> {
   ctx.io.out(
     `To cancel it: blether revoke-invite ${record.name} ${created.invite}`,
   );
+  return 0;
+}
+
+/** Every pending escalation on this device, labelled with its team's local name. */
+function pendingByAgent({ store, teams }: CliContext) {
+  const names = new Map(teams.list().map((t) => [t.id, t.name]));
+  return allPendingEscalations(store.home).map((entry) => ({
+    ...entry,
+    teamName: names.get(entry.team) ?? entry.team,
+  }));
+}
+
+function escalationsList(ctx: CliContext): number {
+  const pending = pendingByAgent(ctx);
+  if (pending.length === 0) {
+    ctx.io.out("Nothing is waiting for your decision.");
+    return 0;
+  }
+  for (const { teamName, agent, escalations } of pending) {
+    ctx.io.out(`${agent} in ${teamName}:`);
+    ctx.io.out(formatEscalations(escalations));
+  }
+  ctx.io.out("");
+  ctx.io.out(
+    "Answer in a session as that agent; it will record your decision.",
+  );
+  return 0;
+}
+
+function status(ctx: CliContext): number {
+  const pending = pendingByAgent(ctx);
+  const count = pending.reduce((n, e) => n + e.escalations.length, 0);
+  if (count > 0) {
+    const agents = pending.map((e) => e.agent).join(", ");
+    ctx.io.out(`⚑ ${count} waiting (${agents})`);
+  }
   return 0;
 }
 

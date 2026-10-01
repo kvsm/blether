@@ -7,6 +7,7 @@ import {
   TeamDirectory,
   defaultBletherHome,
 } from "./keystore.js";
+import { EscalationStore } from "./escalations.js";
 import { PolicyStore } from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer, createSetupProblemServer } from "./server.js";
@@ -134,6 +135,7 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
   }
   const server = createBridgeServer(relay, {
     policy: new PolicyStore(store.home).load(),
+    escalations: new EscalationStore(store.home, team.id, agent.data),
   });
   return { server, connection: relay };
 }

@@ -37,3 +37,9 @@ export {
   type TeamRecord,
 } from "./keystore.js";
 export { startBridge, type StartedBridge } from "./startup.js";
+export {
+  EscalationStore,
+  allPendingEscalations,
+  type Escalation,
+} from "./escalations.js";
+export { REMINDER_INTERVAL_MS } from "./escalation-tools.js";
