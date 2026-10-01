@@ -44,6 +44,7 @@ export class RelayConnection {
   private readonly sends = new Map<string, Pending<SendReceipt>>();
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
   private welcome: Pending<void> | undefined;
+  private readonly arrivalListeners = new Set<(message: Message) => void>();
 
   private constructor(
     private readonly socket: WebSocket,
@@ -106,6 +107,17 @@ export class RelayConnection {
     });
   }
 
+  /** Number of messages waiting to be read. */
+  get unreadCount(): number {
+    return this.unread.length;
+  }
+
+  /** Calls `listener` whenever a new message arrives. Returns a function that unsubscribes. */
+  onArrival(listener: (message: Message) => void): () => void {
+    this.arrivalListeners.add(listener);
+    return () => this.arrivalListeners.delete(listener);
+  }
+
   /** Returns every unread message, oldest first, and marks them read. */
   readMailbox(): Message[] {
     const messages = this.unread.splice(0);
@@ -156,6 +168,7 @@ export class RelayConnection {
         if (this.seen.has(frame.message.id)) return;
         this.seen.add(frame.message.id);
         this.unread.push(frame.message);
+        for (const listener of this.arrivalListeners) listener(frame.message);
         return;
       case "sent":
         take(this.sends, frame.id)?.resolve({
