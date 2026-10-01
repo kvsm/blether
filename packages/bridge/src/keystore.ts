@@ -4,6 +4,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -12,6 +13,7 @@ import {
   IdentityLog,
   PublicKey,
   TeamName,
+  compareLogs,
   verifyIdentityLog,
   type DeviceKey,
 } from "@blether/protocol";
@@ -65,6 +67,11 @@ export class FileKeyStore {
     return join(this.home, "identity.json");
   }
 
+  /** A device key waiting to be added to an identity by another device. */
+  private get pendingPath() {
+    return join(this.home, "pending-device-key.json");
+  }
+
   exists(): boolean {
     return (
       existsSync(this.devicePath) ||
@@ -93,6 +100,90 @@ export class FileKeyStore {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
     writePrivate(this.devicePath, credentials.device);
     writePrivate(this.identityPath, credentials.identity);
+  }
+
+  /** Replaces the stored identity log with a newer version of it. */
+  saveIdentity(identity: IdentityLog): void {
+    writePrivate(this.identityPath, identity);
+  }
+
+  loadPendingDevice(): DeviceKey | undefined {
+    return existsSync(this.pendingPath)
+      ? DeviceKeyFile.parse(readJson(this.pendingPath))
+      : undefined;
+  }
+
+  savePendingDevice(device: DeviceKey): void {
+    mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    writePrivate(this.pendingPath, device);
+  }
+
+  /** Turns the pending device key into this device's key, with `identity` as its identity. */
+  completePendingDevice(identity: IdentityLog): Credentials {
+    const device = this.loadPendingDevice();
+    if (!device) throw new Error("There is no pending device key.");
+    if (!verifyIdentityLog(identity).devices.includes(device.publicKey)) {
+      throw new Error("That identity doesn't include this device's key.");
+    }
+    const credentials = { device, identity };
+    this.save(credentials);
+    rmSync(this.pendingPath);
+    return credentials;
+  }
+}
+
+/** A relay served a log older than, or inconsistent with, one this device has already verified. */
+export class StaleLogError extends Error {
+  constructor(
+    readonly kind: "identity" | "team",
+    relation: "behind" | "diverged",
+  ) {
+    super(
+      relation === "behind"
+        ? `The relay sent an older version of a ${kind} log than this device has already seen.`
+        : `The relay sent a version of a ${kind} log that disagrees with one this device has already seen.`,
+    );
+    this.name = "StaleLogError";
+  }
+}
+
+/** Checks logs from the relay against what this device has already seen. */
+export interface LogWitness {
+  /** Throws StaleLogError unless `log` is the same as, or extends, the longest version seen; then remembers it. */
+  witness(kind: "identity" | "team", id: string, log: readonly unknown[]): void;
+}
+
+/**
+ * Remembers the longest version of each identity and team log this device has
+ * verified, under `<home>/seen`, so a relay can't serve an outdated one
+ * (from before a device was added or a member removed) without being noticed.
+ */
+export class SeenLogs implements LogWitness {
+  constructor(readonly home: string = defaultBletherHome()) {}
+
+  private path(kind: "identity" | "team", id: string) {
+    if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`Bad log id: ${id}`);
+    return join(this.home, "seen", kind, `${id}.json`);
+  }
+
+  witness(
+    kind: "identity" | "team",
+    id: string,
+    log: readonly unknown[],
+  ): void {
+    const path = this.path(kind, id);
+    if (existsSync(path)) {
+      const relation = compareLogs(
+        log,
+        z.array(z.unknown()).parse(readJson(path)),
+      );
+      if (relation === "behind" || relation === "diverged") {
+        throw new StaleLogError(kind, relation);
+      }
+      if (relation === "same") return;
+    }
+    mkdirSync(join(this.home, "seen", kind), { recursive: true, mode: 0o700 });
+    writePrivate(path, log);
   }
 }
 

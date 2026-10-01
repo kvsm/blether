@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { AgentName } from "@blether/protocol";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { FileKeyStore, TeamDirectory } from "./keystore.js";
+import { FileKeyStore, SeenLogs, TeamDirectory } from "./keystore.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer } from "./server.js";
 
@@ -48,8 +48,8 @@ console.error(
 );
 
 const relay = await RelayConnection.connect(team.relayUrl, credentials, {
-  team: team.id,
-  agent: agent.data!,
+  scope: { team: team.id, agent: agent.data! },
+  witness: new SeenLogs(store.home),
 }).catch((error: unknown) =>
   fail(
     error instanceof RelayError
@@ -57,5 +57,9 @@ const relay = await RelayConnection.connect(team.relayUrl, credentials, {
       : `Couldn't connect to the relay at ${team.relayUrl}: ${(error as Error).message}`,
   ),
 );
+// Another of the developer's devices may have added a device since.
+if (relay.identity && relay.identity.length > credentials.identity.length) {
+  store.saveIdentity(relay.identity);
+}
 const server = createBridgeServer(relay);
 await server.connect(new StdioServerTransport());

@@ -47,8 +47,7 @@ async function connectAs(relay: Relay, agent: string) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await RelayConnection.connect(relay.url, credentials, {
-        team,
-        agent,
+        scope: { team, agent },
       });
     } catch (error) {
       const inUse =

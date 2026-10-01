@@ -93,6 +93,11 @@ export class MailboxStore {
       .run(identity.id, identity.name, JSON.stringify(log));
   }
 
+  /** The stored identity log of one developer, if the relay knows them. */
+  developerLog(id: string): IdentityLog | undefined {
+    return this.developerLogs([id])[0];
+  }
+
   /** The stored identity logs of the given developers that the relay knows. */
   developerLogs(ids: Iterable<string>): IdentityLog[] {
     const get = this.db.prepare("SELECT log FROM developers WHERE id = ?");

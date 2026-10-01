@@ -77,7 +77,7 @@ describe("identity", () => {
   it("rejects a log whose entry was changed after signing", () => {
     expect(
       tamper((log) => {
-        log[0]!.entry.name = "Mallory";
+        (log[0]!.entry as { name: string }).name = "Mallory";
       }),
     ).toThrow(IdentityError);
   });
