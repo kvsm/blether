@@ -53,6 +53,19 @@ export class SendLimiter {
     return undefined;
   }
 
+  /** Whether sending one message to each of `recipients` would be over a limit, and why. */
+  checkAll(recipients: readonly string[]): LimitCheck {
+    const recent = this.recent();
+    if (recent.length + recipients.length > this.limits.perAgent) {
+      return `${this.agent} has sent ${recent.length} messages in the last ${this.limits.windowMinutes} minutes, and this would send ${recipients.length} more. This may be a runaway loop.`;
+    }
+    for (const to of recipients) {
+      const reason = this.check(to);
+      if (reason) return reason;
+    }
+    return undefined;
+  }
+
   /** Counts a message that was sent. */
   record(to: string): void {
     this.sends.push({ to, at: this.now().getTime() });

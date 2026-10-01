@@ -11,6 +11,7 @@ import {
   verifyIdentityLog,
   verifyTeamLog,
   type AgentName,
+  type Audience,
   type ClientFrame,
   type DeliveryStatus,
   type ErrorCode,
@@ -63,12 +64,20 @@ export interface ConnectOptions {
   readMessages?: ReadMessageLog;
 }
 
+/** Who a message is for: one agent, every agent holding a role, or every other agent in the team. */
+export type SendTarget =
+  | { kind: "agent"; name: AgentName }
+  | { kind: "role"; role: string }
+  | { kind: "everyone" };
+
 /** A message this device decrypted and verified. */
 export interface ReceivedMessage {
   kind: "message";
   id: string;
   from: AgentName;
   to: AgentName;
+  /** Set when it went to a role or the whole team, rather than just to this agent. */
+  audience?: Audience | undefined;
   body: string;
   /** When the sender sent it, by the sender's signed clock. */
   sentAt: string;
@@ -251,7 +260,11 @@ export class RelayConnection {
    * `to`, as recorded in the verified team log, and sends it. Resolves once
    * the relay has accepted it.
    */
-  async send(to: AgentName, body: string): Promise<SendReceipt> {
+  async send(
+    to: AgentName,
+    body: string,
+    audience?: Audience,
+  ): Promise<SendReceipt> {
     const scope = this.requireScope();
     const recipient = await this.findAgent(to);
     if (!recipient) {
@@ -274,6 +287,7 @@ export class RelayConnection {
         team: scope.team,
         from: scope.agent,
         to,
+        ...(audience ? { audience } : {}),
         body,
         sentAt: new Date().toISOString(),
       },
@@ -281,6 +295,41 @@ export class RelayConnection {
       devices,
     );
     return this.request(this.sends, id, { type: "send", id, to, envelope });
+  }
+
+  /**
+   * The agents a message to `target` would go to, from the verified team
+   * log, never including this session's own agent. Throws RelayError with
+   * an explanation if there are none.
+   */
+  async recipientsFor(target: SendTarget): Promise<AgentName[]> {
+    const scope = this.requireScope();
+    if (target.kind === "agent") return [target.name];
+    const { team } = await this.currentTeam(true);
+    const others = team.agents.filter((a) => a.name !== scope.agent);
+    if (target.kind === "everyone") {
+      if (others.length === 0) {
+        throw new RelayError(
+          "unknown-agent",
+          "There are no other agents in this team.",
+        );
+      }
+      return others.map((a) => a.name);
+    }
+    if (!team.roles.includes(target.role)) {
+      throw new RelayError(
+        "unknown-agent",
+        `This team has no ${target.role} role. Its roles are: ${team.roles.join(", ") || "none yet"}.`,
+      );
+    }
+    const holders = others.filter((a) => a.roles.includes(target.role));
+    if (holders.length === 0) {
+      throw new RelayError(
+        "unknown-agent",
+        `No other agent holds the ${target.role} role.`,
+      );
+    }
+    return holders.map((a) => a.name);
   }
 
   /** The `limit` messages this agent sent most recently, newest first. */
@@ -501,6 +550,7 @@ export class RelayConnection {
       id: payload.id,
       from: payload.from,
       to: payload.to,
+      audience: payload.audience,
       body: payload.body,
       sentAt: payload.sentAt,
       receivedAt: message.receivedAt,

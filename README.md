@@ -63,7 +63,7 @@ Add the bridge to each agent's MCP config, with the team and a different `BLETHE
 }
 ```
 
-The agent gets four tools: `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
+The agent's main tools are `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. `send_message` can go to one agent (`to`), every agent holding a role (`role`), or every other agent in the team (`everyone`); each recipient gets their own encrypted copy. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
 
 Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from earlier dev builds can't be upgraded; move them aside.
 
