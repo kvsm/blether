@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import {
+  EscalationStore,
   FileKeyStore,
   RelayConnection,
   TeamDirectory,
@@ -77,7 +78,13 @@ export function device(root: string, name: string) {
       {
         policy = { outgoing: "free", incoming: "free" },
         client: clientOptions,
-      }: { policy?: ApprovalPolicy; client?: ClientOptions } = {},
+        now,
+      }: {
+        policy?: ApprovalPolicy;
+        client?: ClientOptions;
+        /** The bridge's clock, for escalation reminders. */
+        now?: () => Date;
+      } = {},
     ) {
       const record = teams.get(team)!;
       const connection = await RelayConnection.connect(
@@ -90,7 +97,11 @@ export function device(root: string, name: string) {
         clientOptions,
       );
       const [a, b] = InMemoryTransport.createLinkedPair();
-      await createBridgeServer(connection, { policy }).connect(b);
+      await createBridgeServer(connection, {
+        policy,
+        escalations: new EscalationStore(store.home, record.id, agent),
+        ...(now ? { now } : {}),
+      }).connect(b);
       await client.connect(a);
       const call = async (tool: string, args: Record<string, unknown> = {}) => {
         const result = await client.callTool({ name: tool, arguments: args });
