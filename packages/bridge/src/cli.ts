@@ -9,7 +9,7 @@ import {
   createInvite,
   createTeam,
   formatInviteLink,
-  generateMachineKey,
+  generateDeviceKey,
   isInviteOpen,
   parseInviteLink,
   revokeInvite,
@@ -18,6 +18,7 @@ import {
 } from "@blether/protocol";
 import {
   FileKeyStore,
+  OutdatedBletherHomeError,
   TeamDirectory,
   type Credentials,
   type TeamRecord,
@@ -32,7 +33,7 @@ import { RelayConnection, RelayError } from "./relay-connection.js";
 const USAGE = `Usage: blether <command>
 
 Commands:
-  init --name <name>                 Create this machine's key and your Blether identity
+  init --name <name>                 Create this device's key and your Blether identity
   whoami                             Show your identity
   team create <name> --relay <url>   Start a team on a relay; you become its Team Admin
   team list                          List the teams you belong to
@@ -82,7 +83,8 @@ export async function runCli(
     if (
       error instanceof CliError ||
       error instanceof RelayError ||
-      error instanceof InviteLinkError
+      error instanceof InviteLinkError ||
+      error instanceof OutdatedBletherHomeError
     ) {
       ctx.io.err(error.message);
       return 1;
@@ -141,9 +143,9 @@ function init(args: string[], { store, io }: CliContext): number {
     );
   }
 
-  const machine = generateMachineKey();
-  const identity = createIdentity(machine, name.data);
-  store.save({ machine, identity });
+  const device = generateDeviceKey();
+  const identity = createIdentity(device, name.data);
+  store.save({ device, identity });
 
   const { id } = verifyIdentityLog(identity);
   io.out(`Created identity for ${name.data}.`);
@@ -157,7 +159,7 @@ function whoami({ store, io }: CliContext): number {
   const identity = verifyIdentityLog(credentials.identity);
   io.out(`Name:     ${identity.name}`);
   io.out(`Identity: ${identity.id}`);
-  io.out(`Machine:  ${credentials.machine.publicKey}`);
+  io.out(`Device:  ${credentials.device.publicKey}`);
   return 0;
 }
 
@@ -382,7 +384,7 @@ function loadTeam(teams: TeamDirectory, name: string | undefined): TeamRecord {
 function toSigner(credentials: Credentials): Signer {
   return {
     identity: verifyIdentityLog(credentials.identity),
-    machine: credentials.machine,
+    device: credentials.device,
   };
 }
 

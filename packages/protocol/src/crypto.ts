@@ -22,13 +22,13 @@ export type PublicKey = z.infer<typeof PublicKey>;
 export const Signature = z.string().regex(/^[A-Za-z0-9_-]{86}$/);
 export type Signature = z.infer<typeof Signature>;
 
-/** A machine's signing key pair. The secret key never leaves the machine. */
-export interface MachineKey {
+/** A device's signing key pair. The secret key never leaves the device. */
+export interface DeviceKey {
   publicKey: PublicKey;
   secretKey: string;
 }
 
-export function generateMachineKey(): MachineKey {
+export function generateDeviceKey(): DeviceKey {
   const { publicKey, privateKey } = sodium.crypto_sign_keypair();
   return { publicKey: encode(publicKey), secretKey: encode(privateKey) };
 }
@@ -38,13 +38,13 @@ export function generateMachineKey(): MachineKey {
  * knows the secret gets the same key. `context` keeps keys for different
  * purposes apart.
  */
-export function keyFromSecret(context: string, secret: string): MachineKey {
+export function keyFromSecret(context: string, secret: string): DeviceKey {
   const seed = sodium.crypto_generichash(32, `${context}\n${secret}`, null);
   const { publicKey, privateKey } = sodium.crypto_sign_seed_keypair(seed);
   return { publicKey: encode(publicKey), secretKey: encode(privateKey) };
 }
 
-export function sign(key: MachineKey, message: string): Signature {
+export function sign(key: DeviceKey, message: string): Signature {
   return encode(sodium.crypto_sign_detached(message, decode(key.secretKey)));
 }
 

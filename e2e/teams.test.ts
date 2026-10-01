@@ -14,8 +14,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-/** One developer's machine: their own BLETHER_HOME, driven through the CLI. */
-function machine(root: string, name: string) {
+/** One developer's device: their own BLETHER_HOME, driven through the CLI. */
+function device(root: string, name: string) {
   const store = new FileKeyStore(join(root, name));
   const teams = new TeamDirectory(store.home);
   let clock: Date | undefined;
@@ -75,17 +75,17 @@ function machine(root: string, name: string) {
 describe("teams through the blether CLI", () => {
   let relay: Relay;
   let root: string;
-  let kev: ReturnType<typeof machine>;
-  let carol: ReturnType<typeof machine>;
-  let mallory: ReturnType<typeof machine>;
+  let kev: ReturnType<typeof device>;
+  let carol: ReturnType<typeof device>;
+  let mallory: ReturnType<typeof device>;
   const cleanups: (() => Promise<void>)[] = [];
 
   beforeEach(async () => {
     relay = await startRelay();
     root = mkdtempSync(join(tmpdir(), "blether-teams-"));
-    kev = machine(root, "kev");
-    carol = machine(root, "carol");
-    mallory = machine(root, "mallory");
+    kev = device(root, "kev");
+    carol = device(root, "carol");
+    mallory = device(root, "mallory");
     await kev.run("init", "--name", "Kev");
     await carol.run("init", "--name", "Carol");
     await mallory.run("init", "--name", "Mallory");

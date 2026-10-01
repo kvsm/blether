@@ -8,7 +8,7 @@ import {
 import {
   createIdentity,
   createTeam,
-  generateMachineKey,
+  generateDeviceKey,
   verifyIdentityLog,
 } from "@blether/protocol";
 import { startRelay, type Relay } from "@blether/relay";
@@ -27,13 +27,13 @@ const ChannelNotice = z.object({
 type ChannelNotice = z.infer<typeof ChannelNotice>["params"];
 
 /** One developer, in one team, owns every agent in these tests. */
-const machine = generateMachineKey();
-const credentials = { machine, identity: createIdentity(machine, "Kev") };
+const device = generateDeviceKey();
+const credentials = { device, identity: createIdentity(device, "Kev") };
 let team: string;
 
 async function createTestTeam(relay: Relay) {
   const cli = await RelayConnection.connect(relay.url, credentials);
-  const signer = { machine, identity: verifyIdentityLog(credentials.identity) };
+  const signer = { device, identity: verifyIdentityLog(credentials.identity) };
   const created = await cli.createTeam(createTeam("backend", signer));
   await cli.close();
   return created.team.id;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { signChallenge, verifyChallenge } from "./auth.js";
 import {
   canonicalJson,
-  generateMachineKey,
+  generateDeviceKey,
   hash,
   sign,
   verify,
@@ -16,8 +16,8 @@ import {
 
 describe("crypto", () => {
   it("verifies a signature only for the signed message and key", () => {
-    const key = generateMachineKey();
-    const other = generateMachineKey();
+    const key = generateDeviceKey();
+    const other = generateDeviceKey();
     const signature = sign(key, "hello");
 
     expect(verify(key.publicKey, "hello", signature)).toBe(true);
@@ -43,33 +43,33 @@ describe("crypto", () => {
 
 describe("identity", () => {
   it("creates an identity that verifies", () => {
-    const machine = generateMachineKey();
-    const log = createIdentity(machine, "Kev");
+    const device = generateDeviceKey();
+    const log = createIdentity(device, "Kev");
 
     const identity = verifyIdentityLog(log);
 
     expect(identity.name).toBe("Kev");
-    expect(identity.machines).toEqual([machine.publicKey]);
+    expect(identity.devices).toEqual([device.publicKey]);
     expect(identity.id).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
   it("gives the same id every time it is verified, and different ids to different identities", () => {
-    const log = createIdentity(generateMachineKey(), "Kev");
-    const other = createIdentity(generateMachineKey(), "Kev");
+    const log = createIdentity(generateDeviceKey(), "Kev");
+    const other = createIdentity(generateDeviceKey(), "Kev");
 
     expect(verifyIdentityLog(log).id).toBe(verifyIdentityLog(log).id);
     expect(verifyIdentityLog(other).id).not.toBe(verifyIdentityLog(log).id);
   });
 
   it("survives a JSON round trip", () => {
-    const log = createIdentity(generateMachineKey(), "Kev");
+    const log = createIdentity(generateDeviceKey(), "Kev");
     const roundTripped: unknown = JSON.parse(JSON.stringify(log));
 
     expect(verifyIdentityLog(roundTripped).id).toBe(verifyIdentityLog(log).id);
   });
 
   const tamper = (mutate: (log: IdentityLog) => void) => {
-    const log = structuredClone(createIdentity(generateMachineKey(), "Kev"));
+    const log = structuredClone(createIdentity(generateDeviceKey(), "Kev"));
     mutate(log);
     return () => verifyIdentityLog(log);
   };
@@ -82,21 +82,21 @@ describe("identity", () => {
     ).toThrow(IdentityError);
   });
 
-  it("rejects a first entry signed by a different machine", () => {
-    const intruder = generateMachineKey();
+  it("rejects a first entry signed by a different device", () => {
+    const intruder = generateDeviceKey();
     expect(
       tamper((log) => {
         log[0]!.signer = intruder.publicKey;
         log[0]!.signature = sign(intruder, canonicalJson(log[0]!.entry));
       }),
-    ).toThrow(/signed by its own machine/);
+    ).toThrow(/signed by its own device/);
   });
 
-  it("rejects a log that claims someone else's machine", () => {
-    const victim = generateMachineKey();
+  it("rejects a log that claims someone else's device", () => {
+    const victim = generateDeviceKey();
     expect(
       tamper((log) => {
-        log[0]!.entry.machine = victim.publicKey;
+        log[0]!.entry.device = victim.publicKey;
       }),
     ).toThrow(IdentityError);
   });
@@ -109,11 +109,11 @@ describe("identity", () => {
 
 describe("challenge signatures", () => {
   it("bind the signature to the challenge, the team and the agent", () => {
-    const machine = generateMachineKey();
+    const device = generateDeviceKey();
     const scope = { team: "team-1", agent: "api" };
-    const signature = signChallenge(machine, "challenge-1", scope);
+    const signature = signChallenge(device, "challenge-1", scope);
     const check = (challenge: string, s: typeof scope) =>
-      verifyChallenge(machine.publicKey, challenge, s, signature);
+      verifyChallenge(device.publicKey, challenge, s, signature);
 
     expect(check("challenge-1", scope)).toBe(true);
     expect(check("challenge-2", scope)).toBe(false);

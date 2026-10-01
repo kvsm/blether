@@ -9,7 +9,7 @@ import { SignedTeamEntry, TeamLog } from "./team.js";
  *
  * On connecting, the relay sends a `challenge`. The client answers with
  * `hello`, carrying its developer's identity log and a signature of the
- * challenge by one of that identity's machines (see auth.ts).
+ * challenge by one of that identity's devices (see auth.ts).
  *
  * A bridge's hello names a team and an agent: the session then acts as that
  * agent and can message other agents in the team. The CLI's hello names
@@ -60,7 +60,7 @@ export const ClientFrame = z.discriminatedUnion("type", [
     team: z.string().optional(),
     agent: AgentName.optional(),
     identity: IdentityLog,
-    machine: PublicKey,
+    device: PublicKey,
     signature: Signature,
   }),
   z.object({

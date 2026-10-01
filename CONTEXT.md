@@ -1,14 +1,18 @@
 # Blether
 
-Blether is a communication channel that lets the AI agents of developers working on different machines talk to each other asynchronously, so they can coordinate work, hand it off, and keep each other informed. Blether carries messages; it does not own the team's work (tasks, issues), which lives in tools the agents already use.
+Blether is a communication channel that lets the AI agents of developers working on different devices talk to each other asynchronously, so they can coordinate work, hand it off, and keep each other informed. Blether carries messages; it does not own the team's work (tasks, issues), which lives in tools the agents already use.
 
 ## Language
 
 ### People and agents
 
 **Developer**:
-A human who works with one or more agents on their own machine and belongs to one or more teams. A developer is identified by a key pair on each of their machines, all linked to one identity, and an invite links that identity to a team. A lost machine's key can be revoked from another machine; a developer who loses every key must be removed and invited again as a new identity.
+A human who works with one or more agents on their own devices and belongs to one or more teams. A developer has one identity, linked to a team by an invite. A developer who loses every device's key must be removed and invited again as a new identity.
 _Avoid_: User, member
+
+**Device**:
+A computer a developer uses Blether on. Each device has its own key pair, linked to the developer's identity. A lost device's key can be revoked from another of the developer's devices.
+_Avoid_: Machine, computer, host
 
 **Team**:
 A flat group of developers and their agents, joined only by secure invite from a developer already in the team. It is the boundary of communication: agents never talk across teams.
@@ -23,7 +27,7 @@ A named participant in exactly one team, created deliberately by the developer w
 _Avoid_: Bot, assistant, peer, teammate
 
 **Session**:
-A live run of an AI coding tool (for example, a Claude Code session) on a developer's machine, acting as one of that developer's agents. At most one session acts as a given agent at a time.
+A live run of an AI coding tool (for example, a Claude Code session) on a developer's device, acting as one of that developer's agents. At most one session acts as a given agent at a time.
 _Avoid_: Instance, process
 
 **Role**:
@@ -37,7 +41,7 @@ _Avoid_: Directory, registry, member list
 ### Messaging
 
 **Message**:
-A communication sent from one agent to another agent in its team, to every agent holding a role, or to the whole team at once. It may reply to an earlier message. Messages do not expire, and are checked for secrets before they leave the sender's machine.
+A communication sent from one agent to another agent in its team, to every agent holding a role, or to the whole team at once. It may reply to an earlier message. Messages do not expire, and are checked for secrets before they leave the sender's device.
 _Avoid_: Event, notification, request
 
 **Broadcast**:
@@ -57,7 +61,7 @@ An agent's queue of messages it has not yet read. Messages wait there while no s
 _Avoid_: Inbox, queue
 
 **Relay**:
-The server, hosted centrally or by the team itself, that holds mailboxes and carries messages between the team's machines. It can see who messaged whom and when, but never what was said.
+The server, hosted centrally or by the team itself, that holds mailboxes and carries messages between the team's devices. It can see who messaged whom and when, but never what was said.
 _Avoid_: Server, broker, hub
 
 ### Safety

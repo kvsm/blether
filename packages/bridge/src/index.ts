@@ -12,6 +12,7 @@ export {
 export { runCli, type CliContext, type CliIo } from "./cli.js";
 export {
   FileKeyStore,
+  OutdatedBletherHomeError,
   TeamDirectory,
   defaultBletherHome,
   type Credentials,

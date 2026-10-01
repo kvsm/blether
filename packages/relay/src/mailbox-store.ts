@@ -10,7 +10,7 @@ import type {
 } from "@blether/protocol";
 
 /** Bumped whenever the schema changes incompatibly. */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export class IncompatibleDatabaseError extends Error {
   constructor(path: string, version: number) {

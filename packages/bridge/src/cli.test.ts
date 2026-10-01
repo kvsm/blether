@@ -1,4 +1,10 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { verifyIdentityLog } from "@blether/protocol";
@@ -6,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
 import { FileKeyStore } from "./keystore.js";
 
-describe("blether CLI", async () => {
+describe("blether CLI", () => {
   let home: string;
   let store: FileKeyStore;
   let out: string[];
@@ -27,13 +33,13 @@ describe("blether CLI", async () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("init creates a machine key and an identity that verifies", async () => {
+  it("init creates a device key and an identity that verifies", async () => {
     expect(await run("init", "--name", "Kev")).toBe(0);
 
     const credentials = store.load()!;
     const identity = verifyIdentityLog(credentials.identity);
     expect(identity.name).toBe("Kev");
-    expect(identity.machines).toEqual([credentials.machine.publicKey]);
+    expect(identity.devices).toEqual([credentials.device.publicKey]);
     expect(out.join("\n")).toContain(`Identity: ${identity.id}`);
   });
 
@@ -42,7 +48,7 @@ describe("blether CLI", async () => {
     async () => {
       await run("init", "--name", "Kev");
 
-      expect(statSync(join(store.home, "machine-key.json")).mode & 0o777).toBe(
+      expect(statSync(join(store.home, "device-key.json")).mode & 0o777).toBe(
         0o600,
       );
       expect(statSync(store.home).mode & 0o777).toBe(0o700);
@@ -81,6 +87,15 @@ describe("blether CLI", async () => {
     expect(err.join("\n")).toContain("--nmae");
   });
 
+  it("explains how to recover from a ~/.blether written by an older build", async () => {
+    mkdirSync(store.home, { recursive: true });
+    writeFileSync(join(store.home, "machine-key.json"), "{}");
+
+    expect(await run("whoami")).toBe(1);
+    expect(err.join("\n")).toContain("earlier development build");
+    expect(await run("init", "--name", "Kev")).toBe(1);
+  });
+
   it("rejects stored credentials whose key isn't in the identity", async () => {
     await run("init", "--name", "Kev");
     const other = new FileKeyStore(join(home, "other"));
@@ -91,10 +106,10 @@ describe("blether CLI", async () => {
       }),
     ).toBe(0);
     store.save({
-      machine: other.load()!.machine,
+      device: other.load()!.device,
       identity: store.load()!.identity,
     });
 
-    expect(() => store.load()).toThrow(/doesn't include this machine's key/);
+    expect(() => store.load()).toThrow(/doesn't include this device's key/);
   });
 });

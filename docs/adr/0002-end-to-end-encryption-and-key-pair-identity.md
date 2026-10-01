@@ -1,6 +1,6 @@
 # Messages are end-to-end encrypted, and developers are identified by key pairs
 
-Messages carry code context between developers' machines through a relay that a third party may host. We decided the relay must never be able to read them. Messages are encrypted end to end between agents, so the relay sees only who messaged whom and when. Each developer is identified by a key pair, which a secure invite links to a team. This lets a team trust the hosted relay as much as a self-hosted one. Key pairs also work on any relay without depending on an outside identity provider. A team can still add an identity provider such as GitHub sign-in to manage who it invites.
+Messages carry code context between developers' devices through a relay that a third party may host. We decided the relay must never be able to read them. Messages are encrypted end to end between agents, so the relay sees only who messaged whom and when. Each developer is identified by a key pair, which a secure invite links to a team. This lets a team trust the hosted relay as much as a self-hosted one. Key pairs also work on any relay without depending on an outside identity provider. A team can still add an identity provider such as GitHub sign-in to manage who it invites.
 
 ## Considered Options
 
@@ -10,6 +10,6 @@ Messages carry code context between developers' machines through a relay that a 
 
 ## Consequences
 
-- Everything that inspects a message's content happens on the developer's machine. That includes the secret check on outgoing messages and the assessment of incoming ones. The relay can't help with either.
+- Everything that inspects a message's content happens on the developer's device. That includes the secret check on outgoing messages and the assessment of incoming ones. The relay can't help with either.
 - Messages to a role and broadcasts are encrypted separately for each recipient. A developer leaving the team, or a key changing, affects who can read future messages.
 - Losing a key means losing the identity. Key recovery and rotation still need designing.

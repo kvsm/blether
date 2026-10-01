@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateMachineKey, randomToken, sign } from "./crypto.js";
+import { generateDeviceKey, randomToken, sign } from "./crypto.js";
 import {
   createIdentity,
   verifyIdentityLog,
@@ -23,10 +23,10 @@ import {
 } from "./team.js";
 
 function developer(name: string): Signer {
-  const machine = generateMachineKey();
+  const device = generateDeviceKey();
   return {
-    machine,
-    identity: verifyIdentityLog(createIdentity(machine, name)),
+    device,
+    identity: verifyIdentityLog(createIdentity(device, name)),
   };
 }
 
@@ -151,12 +151,12 @@ describe("team log", () => {
     expect(() => verify(log)).toThrow(/invalid signature/);
   });
 
-  it("refuses an entry signed by a machine its author doesn't own", () => {
+  it("refuses an entry signed by a device its author doesn't own", () => {
     const log = createTeam("backend", kev);
-    const forged = { ...log[0]!, signer: carol.machine.publicKey };
-    forged.signature = sign(carol.machine, "anything");
+    const forged = { ...log[0]!, signer: carol.device.publicKey };
+    forged.signature = sign(carol.device, "anything");
 
-    expect(() => verify([forged])).toThrow(/machine its author doesn't own/);
+    expect(() => verify([forged])).toThrow(/device its author doesn't own/);
   });
 
   it("refuses an author it has no identity for", () => {
