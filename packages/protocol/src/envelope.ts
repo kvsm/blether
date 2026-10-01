@@ -47,6 +47,12 @@ export const MessagePayload = z.object({
   to: AgentName,
   /** Set when the message went to a role or the whole team. */
   audience: Audience.optional(),
+  /**
+   * `hold-notice`: sent by the sender's bridge (not written by its agent)
+   * when that agent escalates one of the recipient's messages. Absent for an
+   * ordinary message.
+   */
+  kind: z.enum(["hold-notice"]).optional(),
   body: z.string().min(1),
   /** When the sender sent it, by the sender's clock. */
   sentAt: z.iso.datetime(),

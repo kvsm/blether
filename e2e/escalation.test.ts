@@ -153,12 +153,15 @@ describe("escalation", () => {
     expect(await api.call("list_agents")).toContain(reminder);
   });
 
-  it("tells the agent how to handle escalations", async () => {
-    const api = await session(carol, "api");
+  it("tells the agent how to handle escalations wherever they're shown, not just in the instructions", async () => {
+    const { api, id } = await requestRollback();
+    const howTo = "only ever an answer your developer gave you directly";
 
-    expect(api.client.getInstructions()).toContain(
-      "Only ever record an answer your developer gave you directly",
-    );
+    expect(
+      await api.call("escalate", { message_id: id, question: "Roll back?" }),
+    ).toContain(howTo);
+    expect(await api.call("list_escalations")).toContain(howTo);
+    expect(await api.call("read_mailbox")).toContain(howTo);
   });
 
   describe("CLI", () => {
