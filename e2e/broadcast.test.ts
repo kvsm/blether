@@ -131,12 +131,12 @@ describe("messages to a role or the whole team", () => {
   it("needs exactly one of to, role or everyone", async () => {
     const web = await session(kev, "web");
 
+    const exactlyOne =
+      "Not sent: give exactly one of to, role or everyone (or reply_to, to reply).";
     expect(
       await web.call("send_message", { to: "api", role: "backend", body: "x" }),
-    ).toBe("Not sent: give exactly one of to, role or everyone.");
-    expect(await web.call("send_message", { body: "x" })).toBe(
-      "Not sent: give exactly one of to, role or everyone.",
-    );
+    ).toBe(exactlyOne);
+    expect(await web.call("send_message", { body: "x" })).toBe(exactlyOne);
   });
 
   it("asks once for the whole fan-out under ask-others when any recipient is someone else's", async () => {
@@ -163,7 +163,12 @@ describe("messages to a role or the whole team", () => {
       policy: {
         outgoing: "free",
         incoming: "free",
-        limits: { perAgent: 5, perRecipient: 10, windowMinutes: 10 },
+        limits: {
+          perAgent: 5,
+          perRecipient: 10,
+          perThread: 10,
+          windowMinutes: 10,
+        },
       },
     });
 

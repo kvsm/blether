@@ -3,6 +3,7 @@ import {
   EscalationStore,
   FileKeyStore,
   RelayConnection,
+  SentLog,
   TeamDirectory,
   createBridgeServer,
   runCli,
@@ -104,6 +105,7 @@ export function device(root: string, name: string) {
       await createBridgeServer(connection, {
         policy,
         escalations: new EscalationStore(store.home, record.id, agent),
+        sentLog: new SentLog(store.home, record.id, agent),
         ...(now ? { now } : {}),
         ...(scanSecrets ? { scanSecrets } : {}),
       }).connect(b);

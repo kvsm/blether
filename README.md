@@ -63,7 +63,7 @@ Add the bridge to each agent's MCP config, with the team and a different `BLETHE
 }
 ```
 
-The agent's main tools are `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. `send_message` can go to one agent (`to`), every agent holding a role (`role`), or every other agent in the team (`everyone`); each recipient gets their own encrypted copy. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
+The agent's main tools are `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. `send_message` can go to one agent (`to`), every agent holding a role (`role`), or every other agent in the team (`everyone`); each recipient gets their own encrypted copy. Giving `reply_to` makes it a reply, in the same thread: on its own it goes back to the sender, even of a role message or broadcast. Sent messages are kept on your device in `~/.blether/sent/`, so a reply can be shown with the start of what it answers. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
 
 Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from earlier dev builds can't be upgraded; move them aside.
 
@@ -80,7 +80,7 @@ Outgoing approval is enforced by the bridge: it shows you each message through y
 
 ### Sending limits
 
-To stop runaway loops (two agents trading replies forever), each agent may send at most 30 messages, and at most 10 to any one agent, in 10 minutes. Going over asks you, in the same prompt as any approval, and is refused if your agent's host can't ask. Change the limits with `blether policy set --limit-per-agent <n> --limit-per-recipient <n> --limit-window <minutes>`.
+To stop runaway loops (two agents trading replies forever), each agent may send at most 30 messages in 10 minutes, and at most 10 to any one agent or in any one thread. Going over asks you, in the same prompt as any approval, and is refused if your agent's host can't ask. Change the limits with `blether policy set --limit-per-agent <n> --limit-per-recipient <n> --limit-per-thread <n> --limit-window <minutes>`.
 
 ### Secret check
 

@@ -80,6 +80,10 @@ export interface ReceivedMessage {
   audience?: Audience | undefined;
   /** Set for a hold notice from the sender's bridge, rather than a message its agent wrote. */
   notice?: "hold" | undefined;
+  /** The message this replies to, if it's a reply. */
+  inReplyTo?: string | undefined;
+  /** The thread it belongs to: the id of the message that started it (its own id if it starts one). */
+  thread: string;
   body: string;
   /** When the sender sent it, by the sender's signed clock. */
   sentAt: string;
@@ -268,7 +272,14 @@ export class RelayConnection {
     {
       audience,
       kind,
-    }: { audience?: Audience | undefined; kind?: "hold-notice" } = {},
+      inReplyTo,
+      thread,
+    }: {
+      audience?: Audience | undefined;
+      kind?: "hold-notice";
+      inReplyTo?: string | undefined;
+      thread?: string | undefined;
+    } = {},
   ): Promise<SendReceipt> {
     const scope = this.requireScope();
     const recipient = await this.findAgent(to);
@@ -294,6 +305,8 @@ export class RelayConnection {
         to,
         ...(audience ? { audience } : {}),
         ...(kind ? { kind } : {}),
+        ...(inReplyTo ? { inReplyTo } : {}),
+        ...(thread ? { thread } : {}),
         body,
         sentAt: new Date().toISOString(),
       },
@@ -558,6 +571,8 @@ export class RelayConnection {
       to: payload.to,
       audience: payload.audience,
       notice: payload.kind === "hold-notice" ? "hold" : undefined,
+      inReplyTo: payload.inReplyTo,
+      thread: payload.thread ?? payload.id,
       body: payload.body,
       sentAt: payload.sentAt,
       receivedAt: message.receivedAt,
