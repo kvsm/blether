@@ -1,2 +1,6 @@
 export { RelayConnection, RelayError } from "./relay-connection.js";
-export { createBridgeServer } from "./server.js";
+export {
+  CLAUDE_CHANNEL,
+  CLAUDE_CHANNEL_NOTIFICATION,
+  createBridgeServer,
+} from "./server.js";

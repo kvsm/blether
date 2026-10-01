@@ -1,4 +1,6 @@
 import {
+  CLAUDE_CHANNEL,
+  CLAUDE_CHANNEL_NOTIFICATION,
   RelayConnection,
   RelayError,
   createBridgeServer,
@@ -7,6 +9,16 @@ import { startRelay, type Relay } from "@blether/relay";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
+
+const ChannelNotice = z.object({
+  method: z.literal(CLAUDE_CHANNEL_NOTIFICATION),
+  params: z.object({
+    content: z.string(),
+    meta: z.record(z.string(), z.string()).optional(),
+  }),
+});
+type ChannelNotice = z.infer<typeof ChannelNotice>["params"];
 
 /**
  * Connects to the relay as `agent`, retrying while the relay still holds the
@@ -30,6 +42,11 @@ async function startSession(relay: Relay, agent: string) {
   const connection = await connectAs(relay, agent);
   const server = createBridgeServer(connection);
   const client = new Client({ name: `${agent}-session`, version: "0.0.0" });
+  // Record channel notices the way Claude Code would receive them.
+  const notices: ChannelNotice[] = [];
+  client.setNotificationHandler(ChannelNotice, ({ params }) => {
+    notices.push(params);
+  });
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -37,6 +54,7 @@ async function startSession(relay: Relay, agent: string) {
 
   return {
     client,
+    notices,
     async call(name: string, args: Record<string, unknown> = {}) {
       const result = await client.callTool({ name, arguments: args });
       const [content] = result.content as { type: string; text: string }[];
@@ -154,5 +172,57 @@ describe("messaging between agents through bridges and a relay", () => {
       "sent_messages",
     ]);
     expect(web.client.getInstructions()).toContain("untrusted");
+  });
+
+  describe("Claude Code channel", () => {
+    it("declares the channel capability", async () => {
+      const web = await session("web");
+
+      expect(web.client.getServerCapabilities()?.experimental).toHaveProperty(
+        CLAUDE_CHANNEL,
+      );
+    });
+
+    it("notifies the session when a message arrives, without including the message", async () => {
+      const web = await session("web");
+      const api = await session("api");
+
+      await web.call("send_message", { to: "api", body: "secret plans" });
+
+      await expect.poll(() => api.notices.length).toBe(1);
+      const [notice] = api.notices;
+      expect(notice).toEqual({
+        content:
+          "New Blether message from web. You have 1 unread; call read_mailbox to read them.",
+        meta: { from: "web", unread: "1" },
+      });
+      expect(JSON.stringify(notice)).not.toContain("secret plans");
+    });
+
+    it("tells a new session about its backlog once it has connected", async () => {
+      await (await session("api")).close();
+      const web = await session("web");
+      await web.call("send_message", { to: "api", body: "one" });
+      await web.call("send_message", { to: "api", body: "two" });
+
+      const api = await session("api");
+
+      await expect.poll(() => api.notices.length).toBe(1);
+      expect(api.notices[0]).toEqual({
+        content:
+          "You have 2 unread Blether message(s) waiting; call read_mailbox to read them.",
+        meta: { unread: "2" },
+      });
+    });
+
+    it("leaves notified messages unread until the agent reads its mailbox", async () => {
+      const web = await session("web");
+      const api = await session("api");
+      await web.call("send_message", { to: "api", body: "still here?" });
+      await expect.poll(() => api.notices.length).toBe(1);
+
+      expect((await web.call("sent_messages")).text).toMatch(/: delivered$/);
+      expect((await api.call("read_mailbox")).text).toContain("still here?");
+    });
   });
 });
