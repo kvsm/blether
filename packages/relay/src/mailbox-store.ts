@@ -10,7 +10,7 @@ import type {
 } from "@blether/protocol";
 
 /** Bumped whenever the schema changes incompatibly. */
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 export class IncompatibleDatabaseError extends Error {
   constructor(path: string, version: number) {
@@ -68,7 +68,9 @@ export class MailboxStore {
         recipient TEXT NOT NULL,
         envelope    TEXT,
         received_at TEXT NOT NULL,
-        status    TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'read'))
+        status    TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'read', 'lost')),
+        -- 1 while the sender hasn't yet been told the message was lost.
+        lost_unacked INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS messages_unread
         ON messages (team, recipient, seq) WHERE status <> 'read';
@@ -157,6 +159,43 @@ export class MailboxStore {
         message.receivedAt,
       );
     return changes === 1;
+  }
+
+  /**
+   * Deletes an agent's mailbox: every message it hadn't read becomes lost,
+   * its envelope is discarded, and its sender is owed a notice.
+   */
+  loseMailbox(team: string, agent: AgentName): void {
+    this.db
+      .prepare(
+        `UPDATE messages SET status = 'lost', envelope = NULL, lost_unacked = 1
+         WHERE team = ? AND recipient = ? AND status IN ('queued', 'delivered')`,
+      )
+      .run(team, agent);
+  }
+
+  /** Lost messages an agent sent that it hasn't been told about yet, oldest first. */
+  unackedLost(team: string, sender: AgentName): SentMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, recipient, received_at, status FROM messages
+         WHERE team = ? AND sender = ? AND status = 'lost' AND lost_unacked = 1 ORDER BY seq`,
+      )
+      .all(team, sender) as unknown as SentRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      to: row.recipient,
+      sentAt: row.received_at,
+      status: row.status,
+    }));
+  }
+
+  /** Records that the sender has seen these lost-message notices. Ids for other senders are ignored. */
+  ackLost(team: string, sender: AgentName, ids: readonly string[]): void {
+    const update = this.db.prepare(
+      "UPDATE messages SET lost_unacked = 0 WHERE id = ? AND team = ? AND sender = ?",
+    );
+    for (const id of ids) update.run(id, team, sender);
   }
 
   markDelivered(id: string): void {

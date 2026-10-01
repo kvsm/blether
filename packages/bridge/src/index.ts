@@ -4,6 +4,7 @@ export {
   type AgentScope,
   type ConnectOptions,
   type MailboxItem,
+  type LostMessage,
   type ReceivedMessage,
   type SendTarget,
   type UnreadableMessage,

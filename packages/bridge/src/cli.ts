@@ -19,12 +19,14 @@ import {
   parseDeviceGrant,
   parseDeviceRequest,
   createIdentity,
+  deleteAgent,
   createInvite,
   createTeam,
   formatInviteLink,
   generateDeviceKey,
   isInviteOpen,
   parseInviteLink,
+  removeMember,
   revokeInvite,
   setAgentRoles,
   verifyIdentityLog,
@@ -63,6 +65,7 @@ Commands:
   team create <name> --relay <url>   Start a team on a relay; you become its Team Admin
   team list                          List the teams you belong to
   team members <team>                Show a team's members and open invites
+  team remove <team> <developer>     Team Admin only: remove a developer and their agents
   invite <team> [--hours <n>]        Create an invite to share (default ${DEFAULT_INVITE_TTL_HOURS} hours)
   revoke-invite <team> <invite-id>   Revoke an invite that hasn't been used
   join <invite> [--as <name>]        Join a team; --as picks your local name for it
@@ -76,6 +79,7 @@ Commands:
   agent roles <team> <name> [--role <r>]...
                                      Replace the roles of one of your agents
   agent list <team>                  Show the team's agents and who is online
+  agent delete <team> <name>         Delete one of your agents (or any, as Team Admin)
   escalations                        List messages your agents are holding for your decision
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
@@ -152,6 +156,7 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       if (sub === "create") return teamCreate(args, ctx);
       if (sub === "list") return teamList(ctx);
       if (sub === "members") return teamMembers(args, ctx);
+      if (sub === "remove") return teamRemove(args, ctx);
       throw new CliError(
         `Unknown team command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
@@ -178,6 +183,7 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       if (sub === "create") return agentCreate(args, ctx);
       if (sub === "roles") return agentRoles(args, ctx);
       if (sub === "list") return agentList(args, ctx);
+      if (sub === "delete") return agentDelete(args, ctx);
       throw new CliError(
         `Unknown agent command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
@@ -730,6 +736,88 @@ async function agentRoles(args: string[], ctx: CliContext): Promise<number> {
     roles.length > 0
       ? `${name}'s roles are now: ${roles.join(", ")}.`
       : `${name} now has no roles.`,
+  );
+  return 0;
+}
+
+async function teamRemove(args: string[], ctx: CliContext): Promise<number> {
+  const record = loadTeam(ctx.teams, args[0]);
+  const who = args[1];
+  if (!who) throw new CliError("Usage: blether team remove <team> <developer>");
+  const credentials = loadCredentials(ctx.store);
+  const me = verifyIdentityLog(credentials.identity).id;
+
+  const removed = await withRelay(
+    ctx,
+    record.relayUrl,
+    credentials,
+    async (relay) => {
+      const { team, identities } = await relay.getTeam(record.id);
+      if (team.admin !== me) {
+        throw new CliError(
+          `Only the Team Admin of ${record.name} can remove developers.`,
+        );
+      }
+      // A developer is named by their name, or the start of their identity id.
+      const matches = team.members.filter(
+        (id) =>
+          identities.get(id)?.name === who ||
+          (who.length >= 8 && id.startsWith(who)),
+      );
+      if (matches.length === 0) {
+        throw new CliError(`${record.name} has no member called ${who}.`);
+      }
+      if (matches.length > 1) {
+        throw new CliError(
+          `More than one member is called ${who}. Use the start of their identity id instead: ${matches.join(", ")}`,
+        );
+      }
+      const [member] = matches as [string];
+      if (member === me) {
+        throw new CliError("The Team Admin can't remove themselves.");
+      }
+      const agents = team.agents.filter((a) => a.owner === member);
+      await relay.appendTeam(
+        record.id,
+        removeMember(team, member, toSigner(credentials), now(ctx)),
+      );
+      return { name: identities.get(member)?.name ?? member, agents };
+    },
+  );
+  ctx.io.out(`Removed ${removed.name} from ${record.name}.`);
+  if (removed.agents.length > 0) {
+    ctx.io.out(
+      `Deleted their agents: ${removed.agents.map((a) => a.name).join(", ")}. Unread messages to them are lost, and their senders will be told.`,
+    );
+  }
+  return 0;
+}
+
+async function agentDelete(args: string[], ctx: CliContext): Promise<number> {
+  const record = loadTeam(ctx.teams, args[0]);
+  const name = parseName(
+    AgentName,
+    args[1],
+    "Usage: blether agent delete <team> <name>",
+  );
+  const credentials = loadCredentials(ctx.store);
+  const me = verifyIdentityLog(credentials.identity).id;
+
+  await withRelay(ctx, record.relayUrl, credentials, async (relay) => {
+    const { team } = await relay.getTeam(record.id);
+    const agent = team.agents.find((a) => a.name === name);
+    if (!agent)
+      throw new CliError(`${record.name} has no agent called ${name}.`);
+    if (agent.owner !== me && team.admin !== me) {
+      throw new CliError(`${name} belongs to another developer.`);
+    }
+    await relay.appendTeam(
+      record.id,
+      deleteAgent(team, name, toSigner(credentials), now(ctx)),
+    );
+  });
+  ctx.io.out(
+    `Deleted agent ${name} from ${record.name}. Unread messages to it are lost, and their senders will be told. The name can be used again.`,
   );
   return 0;
 }
