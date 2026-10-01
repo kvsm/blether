@@ -4,14 +4,18 @@ import {
   parseFrame,
   type AgentName,
   type ErrorCode,
+  type Message,
   type RelayFrame,
 } from "@blether/protocol";
 import { WebSocketServer, type WebSocket } from "ws";
+import { MailboxStore } from "./mailbox-store.js";
 
 export interface RelayOptions {
   /** Port to listen on. 0 picks a free port. */
   port?: number;
   host?: string;
+  /** Path of the mailbox database. Defaults to an in-memory store. */
+  databasePath?: string;
 }
 
 export interface Relay {
@@ -21,13 +25,15 @@ export interface Relay {
 }
 
 /**
- * Starts a relay that passes messages between connected bridges.
+ * Starts a relay that holds agents' mailboxes and passes messages between
+ * connected bridges.
  *
- * Walking-skeleton behaviour: there is no identity, team or encryption, and
- * messages to an agent with no connected session are refused rather than
- * queued (mailboxes arrive in #10).
+ * Walking-skeleton behaviour: there is no identity, team or encryption. Until
+ * agents are created deliberately (#8), any agent a session has ever acted as
+ * can be messaged.
  */
 export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
+  const store = new MailboxStore(options.databasePath ?? ":memory:");
   const wss = new WebSocketServer({
     port: options.port ?? 0,
     host: options.host ?? "127.0.0.1",
@@ -38,6 +44,12 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   });
 
   const sessions = new Map<AgentName, WebSocket>();
+
+  const deliver = (socket: WebSocket, message: Message) => {
+    const frame: RelayFrame = { type: "deliver", message };
+    socket.send(JSON.stringify(frame));
+    store.markDelivered(message.id);
+  };
 
   wss.on("connection", (socket) => {
     let agent: AgentName | undefined;
@@ -56,57 +68,80 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
         return;
       }
 
-      switch (frame.type) {
-        case "hello": {
-          if (agent) {
-            fail("already-introduced", `This connection is already ${agent}.`);
-            return;
-          }
-          if (sessions.has(frame.agent)) {
-            fail(
-              "agent-in-use",
-              `Another session is already acting as ${frame.agent}.`,
-            );
-            socket.close();
-            return;
-          }
-          agent = frame.agent;
-          sessions.set(agent, socket);
-          send({ type: "welcome", agent });
+      if (frame.type === "hello") {
+        if (agent) {
+          fail("already-introduced", `This connection is already ${agent}.`);
           return;
         }
+        if (sessions.has(frame.agent)) {
+          fail(
+            "agent-in-use",
+            `Another session is already acting as ${frame.agent}.`,
+          );
+          socket.close();
+          return;
+        }
+        agent = frame.agent;
+        sessions.set(agent, socket);
+        store.rememberAgent(agent);
+        send({ type: "welcome", agent });
+        for (const message of store.unread(agent)) deliver(socket, message);
+        return;
+      }
+
+      if (!agent) {
+        fail(
+          "not-introduced",
+          "Send hello first.",
+          frame.type === "send" ? frame.id : undefined,
+        );
+        return;
+      }
+
+      switch (frame.type) {
         case "send": {
-          if (!agent) {
+          if (!store.isKnownAgent(frame.to)) {
             fail(
-              "not-introduced",
-              "Send hello before sending messages.",
+              "unknown-agent",
+              `There is no agent called ${frame.to}.`,
+              frame.id,
+            );
+            return;
+          }
+          const message: Message = {
+            id: frame.id,
+            from: agent,
+            to: frame.to,
+            body: frame.body,
+            sentAt: new Date().toISOString(),
+          };
+          if (!store.add(message)) {
+            fail(
+              "duplicate-id",
+              `A message with id ${frame.id} already exists.`,
               frame.id,
             );
             return;
           }
           const recipient = sessions.get(frame.to);
-          if (!recipient) {
-            fail(
-              "recipient-offline",
-              `No session is acting as ${frame.to}.`,
-              frame.id,
-            );
-            return;
-          }
-          const deliver: RelayFrame = {
-            type: "deliver",
-            message: {
-              id: frame.id,
-              from: agent,
-              to: frame.to,
-              body: frame.body,
-              sentAt: new Date().toISOString(),
-            },
-          };
-          recipient.send(JSON.stringify(deliver));
-          send({ type: "sent", id: frame.id });
+          if (recipient) deliver(recipient, message);
+          send({
+            type: "sent",
+            id: frame.id,
+            status: recipient ? "delivered" : "queued",
+          });
           return;
         }
+        case "read":
+          store.markRead(agent, frame.ids);
+          return;
+        case "list-sent":
+          send({
+            type: "sent-list",
+            requestId: frame.requestId,
+            messages: store.sentBy(agent, frame.limit),
+          });
+          return;
       }
     });
 
@@ -123,7 +158,11 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     close: () =>
       new Promise<void>((resolve, reject) => {
         for (const client of wss.clients) client.terminate();
-        wss.close((err) => (err ? reject(err) : resolve()));
+        wss.close((err) => {
+          store.close();
+          if (err) reject(err);
+          else resolve();
+        });
       }),
   };
 }

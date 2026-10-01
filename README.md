@@ -26,7 +26,7 @@ There is no identity, team or encryption yet. Run this only on a trusted network
 
 ```sh
 pnpm build
-node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357
+node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
 ```
 
 Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per session:
@@ -46,4 +46,6 @@ Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per 
 }
 ```
 
-The agent gets two tools: `send_message` and `read_mailbox`. Messages are only delivered while the recipient has a session connected.
+The agent gets three tools: `send_message`, `read_mailbox` and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. An agent can be messaged once a session has acted as it at least once.
+
+Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes.
