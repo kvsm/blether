@@ -396,6 +396,14 @@ export class RelayConnection {
     return this.unread.length;
   }
 
+  /** Who the waiting messages are from, without reading them: agent names, oldest first, each once. */
+  unreadFrom(): string[] {
+    const from = this.unread.map((item) =>
+      item.kind === "lost" ? "lost-message notices" : item.from,
+    );
+    return [...new Set(from)];
+  }
+
   /** Calls `listener` whenever a new message arrives. Returns a function that unsubscribes. */
   onArrival(listener: (item: MailboxItem) => void): () => void {
     this.arrivalListeners.add(listener);
