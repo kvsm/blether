@@ -69,3 +69,7 @@ _Avoid_: Permissions, trust level
 **Escalation**:
 An agent asking its developer for confirmation before sending or acting on something. An agent escalates whenever it doubts that acting on a message is safe, whatever its approval policy says ("trust, but verify"), and whenever it reaches a messaging limit. Silence is never approval: an escalation waits until the developer answers.
 _Avoid_: Approval request, prompt
+
+**Safety Number**:
+A short code each developer can see for every teammate. If two developers compare it and it matches, they know they are talking to each other and not to someone the relay has slipped in.
+_Avoid_: Fingerprint, verification code
