@@ -27,6 +27,7 @@ import {
   isInviteOpen,
   parseInviteLink,
   removeMember,
+  revokeDevice,
   revokeInvite,
   setAgentRoles,
   verifyIdentityLog,
@@ -73,6 +74,7 @@ Commands:
   device add <request> [--label <l>] On an existing device: approve a new device
   device accept <grant>              On the new device: finish adding it
   device list                        List your identity's devices
+  device revoke <fingerprint>        Revoke a lost or stolen device, from another of yours
   role add <team> <role>             Add a role to the team's agreed list
   agent create <team> <name> [--role <r>]...
                                      Create an agent you own, with roles from the team's list
@@ -194,6 +196,7 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       if (sub === "add") return deviceAdd(args, ctx);
       if (sub === "accept") return deviceAccept(args, ctx);
       if (sub === "list") return deviceList(ctx);
+      if (sub === "revoke") return deviceRevoke(args, ctx);
       throw new CliError(
         `Unknown device command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
@@ -360,13 +363,98 @@ function deviceAccept(args: string[], ctx: CliContext): number {
 function deviceList({ store, io }: CliContext): number {
   const credentials = loadCredentials(store);
   const identity = verifyIdentityLog(credentials.identity);
+  const firstDevice = credentials.identity[0]!.entry.device;
   io.out(`Devices for ${identity.name}:`);
-  for (const [index, device] of identity.deviceInfo.entries()) {
-    const label = device.label ?? (index === 0 ? "first device" : "unnamed");
+  for (const device of identity.deviceInfo) {
+    const label =
+      device.label ?? (device.key === firstDevice ? "first device" : "unnamed");
     const here =
       device.key === credentials.device.publicKey ? "  (this device)" : "";
     io.out(
       `  ${deviceFingerprint(device.key)}  ${label}, added ${device.addedAt}${here}`,
+    );
+  }
+  if (identity.revoked.length > 0) {
+    io.out("Revoked:");
+    for (const device of identity.revoked) {
+      io.out(`  ${deviceFingerprint(device.key)}  revoked ${device.revokedAt}`);
+    }
+  }
+  return 0;
+}
+
+async function deviceRevoke(args: string[], ctx: CliContext): Promise<number> {
+  const wanted = args.join("").replaceAll(" ", "");
+  if (wanted.length < 4) {
+    throw new CliError(
+      "Usage: blether device revoke <fingerprint> (from `blether device list`)",
+    );
+  }
+  const credentials = loadCredentials(ctx.store);
+  const identityLog = await latestIdentity(ctx, credentials);
+  const identity = verifyIdentityLog(identityLog);
+  const matches = identity.devices.filter((key) =>
+    deviceFingerprint(key).replaceAll(" ", "").startsWith(wanted),
+  );
+  if (matches.length === 0) {
+    throw new CliError(
+      `None of your devices has a fingerprint starting ${wanted}. Run \`blether device list\`.`,
+    );
+  }
+  if (matches.length > 1) {
+    throw new CliError(
+      "More than one device matches; give more of the fingerprint.",
+    );
+  }
+  const [device] = matches as [string];
+  if (device === credentials.device.publicKey) {
+    throw new CliError(
+      "That's this device. Revoke a device from one of your other devices.",
+    );
+  }
+
+  ctx.io.out(`Revoking device ${deviceFingerprint(device)}.`);
+  const confirmed = await confirm(
+    ctx,
+    "It will no longer be able to connect, read new messages or act for you, and can't be added back. Revoke it?",
+  );
+  if (!confirmed) {
+    ctx.io.err("Not revoked.");
+    return 1;
+  }
+  const updated = revokeDevice(
+    identityLog,
+    credentials.device,
+    device,
+    now(ctx),
+  );
+  ctx.store.saveIdentity(updated);
+  new SeenLogs(ctx.store.home).witness("identity", identity.id, updated);
+
+  // Tell every relay you use, so it refuses the device straight away.
+  const relays = [...new Set(ctx.teams.list().map((t) => t.relayUrl))];
+  const unreached: string[] = [];
+  for (const url of relays) {
+    try {
+      await withRelay(
+        ctx,
+        url,
+        { device: credentials.device, identity: updated },
+        async () => {},
+      );
+    } catch (error) {
+      if (!(error instanceof CliError || error instanceof RelayError)) {
+        throw error;
+      }
+      unreached.push(url);
+    }
+  }
+  ctx.io.out(
+    `Revoked. Teammates' agents stop encrypting for it within a minute.`,
+  );
+  if (unreached.length > 0) {
+    ctx.io.err(
+      `Couldn't reach ${unreached.join(", ")}; it will learn of the revocation the next time any of your devices connects.`,
     );
   }
   return 0;

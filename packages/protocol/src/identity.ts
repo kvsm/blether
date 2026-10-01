@@ -16,7 +16,7 @@ import {
  * later entry names the hash of the one before it and is signed by a device
  * already in the log.
  *
- * Revoking devices arrives with #21.
+ * A revoked device can sign nothing further, and can't be added back.
  */
 
 export const DeveloperName = z.string().trim().min(1).max(64);
@@ -35,6 +35,12 @@ export const IdentityEntry = z.discriminatedUnion("type", [
     type: z.literal("device-added"),
     device: PublicKey,
     label: DeviceLabel.optional(),
+    createdAt: z.iso.datetime(),
+  }),
+  /** Revokes a device, e.g. one that was lost or stolen. Signed by another of the identity's devices. */
+  z.object({
+    type: z.literal("device-revoked"),
+    device: PublicKey,
     createdAt: z.iso.datetime(),
   }),
 ]);
@@ -63,9 +69,11 @@ export interface Identity {
   /** Stable id: the hash of the log's first entry. */
   id: string;
   name: string;
-  /** Public keys of the developer's devices, oldest first. */
+  /** Public keys of the developer's devices, oldest first. Revoked devices aren't included. */
   devices: PublicKey[];
   deviceInfo: DeviceInfo[];
+  /** Devices that have been revoked. */
+  revoked: { key: PublicKey; revokedAt: string }[];
 }
 
 export class IdentityError extends Error {
@@ -126,10 +134,54 @@ export function addDevice(
   if (identity.devices.includes(newDevice)) {
     throw new IdentityError("That device is already part of this identity.");
   }
+  if (identity.revoked.some((r) => r.key === newDevice)) {
+    throw new IdentityError("That device was revoked; it can't be added back.");
+  }
   const entry: IdentityEntry = {
     type: "device-added",
     device: PublicKey.parse(newDevice),
     ...(label === undefined ? {} : { label: DeviceLabel.parse(label) }),
+    createdAt: now.toISOString(),
+  };
+  const prev = identityEntryHash(log[log.length - 1]!);
+  return [
+    ...log,
+    {
+      entry,
+      prev,
+      signer: by.publicKey,
+      signature: sign(by, signedContent(entry, prev)),
+    },
+  ];
+}
+
+/**
+ * Returns `log` with `device` revoked, signed by `by`, another of the
+ * identity's devices.
+ */
+export function revokeDevice(
+  log: IdentityLog,
+  by: DeviceKey,
+  device: PublicKey,
+  now = new Date(),
+): IdentityLog {
+  const identity = verifyIdentityLog(log);
+  if (!identity.devices.includes(by.publicKey)) {
+    throw new IdentityError(
+      "Only one of the identity's devices can revoke a device.",
+    );
+  }
+  if (device === by.publicKey) {
+    throw new IdentityError(
+      "Revoke a device from one of your other devices, not from itself.",
+    );
+  }
+  if (!identity.devices.includes(device)) {
+    throw new IdentityError("That device isn't part of this identity.");
+  }
+  const entry: IdentityEntry = {
+    type: "device-revoked",
+    device,
     createdAt: now.toISOString(),
   };
   const prev = identityEntryHash(log[log.length - 1]!);
@@ -173,6 +225,7 @@ export function verifyIdentityLog(log: unknown): Identity {
     name: first!.entry.name,
     devices: [first!.entry.device],
     deviceInfo: [{ key: first!.entry.device, addedAt: first!.entry.createdAt }],
+    revoked: [],
   };
 
   let previous = first!;
@@ -207,11 +260,36 @@ export function verifyIdentityLog(log: unknown): Identity {
             `${where}: device is already part of this identity.`,
           );
         }
+        if (identity.revoked.some((r) => r.key === entry.device)) {
+          throw new IdentityError(
+            `${where}: a revoked device can't be added back.`,
+          );
+        }
         identity.devices.push(entry.device);
         identity.deviceInfo.push({
           key: entry.device,
           label: entry.label,
           addedAt: entry.createdAt,
+        });
+        break;
+      case "device-revoked":
+        if (!identity.devices.includes(entry.device)) {
+          throw new IdentityError(
+            `${where}: that device isn't part of this identity.`,
+          );
+        }
+        if (identity.devices.length === 1) {
+          throw new IdentityError(
+            `${where}: an identity's last device can't be revoked.`,
+          );
+        }
+        identity.devices = identity.devices.filter((d) => d !== entry.device);
+        identity.deviceInfo = identity.deviceInfo.filter(
+          (d) => d.key !== entry.device,
+        );
+        identity.revoked.push({
+          key: entry.device,
+          revokedAt: entry.createdAt,
         });
         break;
     }

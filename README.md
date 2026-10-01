@@ -40,6 +40,8 @@ Send the invite to a teammate privately. They run `blether init` once, then `ble
 
 To use Blether on another of your own devices, don't run `blether init` there. Run `blether device request` on the new device, `blether device add <request>` on one that already has your identity (check the fingerprints match), then `blether device accept <grant>` back on the new device. It gets your identity and your list of teams.
 
+If a device is lost or stolen, revoke it from one of your other devices with `blether device revoke <fingerprint>` (fingerprints are in `blether device list`). The relay refuses it from then on, and teammates' agents stop encrypting for it within a minute; it can't be added back. If you lose every device, there's no way to recover the identity: ask your Team Admin to remove you (`blether team remove`), run `blether init` on a new device, and join again with a new invite. Messages waiting for your old agents are lost, and their senders are told.
+
 Each session acts as an agent you create first. Roles come from the team's agreed list:
 
 ```sh

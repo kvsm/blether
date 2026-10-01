@@ -31,6 +31,9 @@ import {
   type ReadMessageLog,
 } from "./keystore.js";
 
+/** How long a verified team log is used before it's fetched again. */
+const TEAM_CACHE_MS = 30_000;
+
 /** The relay refused something, or its answer didn't verify. */
 export class RelayError extends Error {
   constructor(
@@ -170,8 +173,8 @@ export class RelayConnection {
   private readonly seenLost = new Set<string>();
   /** Deliveries are decrypted and verified one at a time, in order. */
   private inbox: Promise<void> = Promise.resolve();
-  /** The team log as last verified, refreshed when it's missing something. */
-  private teamCache: VerifiedTeam | undefined;
+  /** The team log as last verified, refreshed when it's missing something or stale. */
+  private teamCache: { team: VerifiedTeam; at: number } | undefined;
   private readonly sends = new Map<string, Pending<SendReceipt>>();
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
   private readonly teamRequests = new Map<string, Pending<TeamReply>>();
@@ -496,12 +499,21 @@ export class RelayConnection {
     return this.scope;
   }
 
-  /** The verified team log, fetched again if `refresh` or not yet fetched. */
+  /**
+   * The verified team log: fetched again if `refresh`, or if the cached copy
+   * is more than TEAM_CACHE_MS old, so a revoked device or a removed member
+   * stops being encrypted for within seconds.
+   */
   private async currentTeam(refresh = false): Promise<VerifiedTeam> {
-    if (!this.teamCache || refresh) {
-      this.teamCache = await this.getTeam(this.requireScope().team);
+    const stale =
+      !this.teamCache || Date.now() - this.teamCache.at > TEAM_CACHE_MS;
+    if (refresh || stale) {
+      this.teamCache = {
+        team: await this.getTeam(this.requireScope().team),
+        at: Date.now(),
+      };
     }
-    return this.teamCache;
+    return this.teamCache!.team;
   }
 
   /**
