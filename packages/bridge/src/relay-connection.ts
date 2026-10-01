@@ -1,22 +1,30 @@
 import { randomUUID } from "node:crypto";
 import {
+  IdentityError,
   RelayFrame,
+  TeamError,
   parseFrame,
   signChallenge,
+  verifyIdentityLog,
+  verifyTeamLog,
   type AgentName,
   type ClientFrame,
   type DeliveryStatus,
   type ErrorCode,
+  type Identity,
   type Message,
   type SentMessage,
+  type SignedTeamEntry,
+  type Team,
+  type TeamLog,
 } from "@blether/protocol";
 import { WebSocket } from "ws";
 import type { Credentials } from "./keystore.js";
 
-/** The relay refused something the bridge asked for. */
+/** The relay refused something, or its answer didn't verify. */
 export class RelayError extends Error {
   constructor(
-    readonly code: ErrorCode | "disconnected",
+    readonly code: ErrorCode | "disconnected" | "untrusted-reply",
     message: string,
   ) {
     super(message);
@@ -30,14 +38,34 @@ export interface SendReceipt {
   status: Exclude<DeliveryStatus, "read">;
 }
 
+/** A team log the bridge has verified itself, with the identities of everyone in it. */
+export interface VerifiedTeam {
+  team: Team;
+  log: TeamLog;
+  identities: Map<string, Identity>;
+}
+
+/** The team and agent a bridge session acts as. */
+export interface AgentScope {
+  team: string;
+  agent: AgentName;
+}
+
 interface Pending<T> {
   resolve: (value: T) => void;
   reject: (error: RelayError) => void;
 }
 
+interface TeamReply {
+  log: TeamLog;
+  identities: unknown[];
+}
+
 /**
- * A session's connection to the relay, acting as one agent. Messages the
- * relay delivers are held here until the agent reads them.
+ * A connection to the relay, authenticated as a developer. A bridge's
+ * connection also acts as one agent in a team, and holds the messages the
+ * relay delivers until the agent reads them. The CLI's connection acts as no
+ * agent, and only reads and extends team logs.
  */
 export class RelayConnection {
   private readonly unread: Message[] = [];
@@ -45,6 +73,7 @@ export class RelayConnection {
   private readonly seen = new Set<string>();
   private readonly sends = new Map<string, Pending<SendReceipt>>();
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
+  private readonly teamRequests = new Map<string, Pending<TeamReply>>();
   private challenge: Pending<string> | undefined;
   private welcome: Pending<string> | undefined;
   /** The authenticated developer's identity id, once the relay has welcomed this session. */
@@ -53,34 +82,46 @@ export class RelayConnection {
 
   private constructor(
     private readonly socket: WebSocket,
-    readonly agent: AgentName,
+    readonly scope: AgentScope | undefined,
   ) {
     socket.on("message", (data) => this.receive(data.toString()));
     socket.on("close", () => {
       const error = new RelayError("disconnected", "Lost connection to relay.");
       this.challenge?.reject(error);
       this.welcome?.reject(error);
-      for (const pending of [...this.sends.values(), ...this.listings.values()])
+      for (const pending of [
+        ...this.sends.values(),
+        ...this.listings.values(),
+        ...this.teamRequests.values(),
+      ])
         pending.reject(error);
       this.sends.clear();
       this.listings.clear();
+      this.teamRequests.clear();
     });
   }
 
+  /** The agent this session acts as. Throws for a CLI session. */
+  get agent(): AgentName {
+    if (!this.scope) throw new Error("This session isn't acting as an agent.");
+    return this.scope.agent;
+  }
+
   /**
-   * Connects to the relay, authenticates as the developer in `credentials`,
-   * and starts acting as `agent`. Anything already waiting in the agent's
-   * mailbox is delivered straight away.
+   * Connects to the relay and authenticates as the developer in
+   * `credentials`. With a `scope`, the session acts as that agent in that
+   * team, and anything already waiting in the agent's mailbox is delivered
+   * straight away.
    */
   static async connect(
     url: string,
-    agent: AgentName,
     credentials: Credentials,
+    scope?: AgentScope,
   ): Promise<RelayConnection> {
     const socket = new WebSocket(url);
     // Attach the frame handler at once: the relay sends its challenge as soon
     // as the connection opens, and pending messages straight after welcome.
-    const connection = new RelayConnection(socket, agent);
+    const connection = new RelayConnection(socket, scope);
     const challenged = new Promise<string>((resolve, reject) => {
       connection.challenge = { resolve, reject };
     });
@@ -99,10 +140,10 @@ export class RelayConnection {
       const challenge = await challenged;
       connection.write({
         type: "hello",
-        agent,
+        ...(scope ?? {}),
         identity: credentials.identity,
         machine: credentials.machine.publicKey,
-        signature: signChallenge(credentials.machine, challenge, agent),
+        signature: signChallenge(credentials.machine, challenge, scope ?? {}),
       });
       connection.developer = await welcomed;
     } catch (error) {
@@ -146,6 +187,40 @@ export class RelayConnection {
       this.write({ type: "read", ids: messages.map((m) => m.id) });
     }
     return messages;
+  }
+
+  /** Starts a team whose log is `log`, returning it as the relay stored it. */
+  async createTeam(log: TeamLog): Promise<VerifiedTeam> {
+    const requestId = randomUUID();
+    const reply = await this.request(this.teamRequests, requestId, {
+      type: "create-team",
+      requestId,
+      log,
+    });
+    return verifyReply(reply);
+  }
+
+  /** Fetches team `id`'s log and verifies it. */
+  async getTeam(id: string): Promise<VerifiedTeam> {
+    const requestId = randomUUID();
+    const reply = await this.request(this.teamRequests, requestId, {
+      type: "get-team",
+      requestId,
+      team: id,
+    });
+    return verifyReply(reply, id);
+  }
+
+  /** Appends `entry` to team `id`'s log, returning the verified result. */
+  async appendTeam(id: string, entry: SignedTeamEntry): Promise<VerifiedTeam> {
+    const requestId = randomUUID();
+    const reply = await this.request(this.teamRequests, requestId, {
+      type: "append-team",
+      requestId,
+      team: id,
+      entry,
+    });
+    return verifyReply(reply, id);
   }
 
   /** Disconnects from the relay, resolving once the connection has closed. */
@@ -204,16 +279,51 @@ export class RelayConnection {
       case "sent-list":
         take(this.listings, frame.requestId)?.resolve(frame.messages);
         return;
+      case "team":
+        take(this.teamRequests, frame.requestId)?.resolve(frame);
+        return;
       case "error": {
         const error = new RelayError(frame.code, frame.message);
-        if (frame.id) take(this.sends, frame.id)?.reject(error);
-        else if (this.welcome) {
+        if (frame.id) {
+          (
+            take(this.sends, frame.id) ??
+            take(this.listings, frame.id) ??
+            take(this.teamRequests, frame.id)
+          )?.reject(error);
+        } else if (this.welcome) {
           this.welcome.reject(error);
           this.welcome = undefined;
         }
         return;
       }
     }
+  }
+}
+
+/**
+ * Verifies a team log the relay sent, rather than trusting the relay: every
+ * identity and every entry is checked, and the team must be the one asked for.
+ */
+function verifyReply(reply: TeamReply, expectedId?: string): VerifiedTeam {
+  try {
+    const identities = new Map<string, Identity>();
+    for (const log of reply.identities) {
+      const identity = verifyIdentityLog(log);
+      identities.set(identity.id, identity);
+    }
+    const team = verifyTeamLog(reply.log, identities);
+    if (expectedId && team.id !== expectedId) {
+      throw new TeamError("The relay sent a different team's log.");
+    }
+    return { team, log: reply.log, identities };
+  } catch (error) {
+    if (error instanceof TeamError || error instanceof IdentityError) {
+      throw new RelayError(
+        "untrusted-reply",
+        `The relay's copy of the team doesn't verify: ${error.message}`,
+      );
+    }
+    throw error;
   }
 }
 

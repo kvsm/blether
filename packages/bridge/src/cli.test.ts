@@ -6,15 +6,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
 import { FileKeyStore } from "./keystore.js";
 
-describe("blether CLI", () => {
+describe("blether CLI", async () => {
   let home: string;
   let store: FileKeyStore;
   let out: string[];
   let err: string[];
   const run = (...argv: string[]) =>
-    runCli(argv, store, {
-      out: (line) => out.push(line),
-      err: (line) => err.push(line),
+    runCli(argv, {
+      store,
+      io: { out: (line) => out.push(line), err: (line) => err.push(line) },
     });
 
   beforeEach(() => {
@@ -27,8 +27,8 @@ describe("blether CLI", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it("init creates a machine key and an identity that verifies", () => {
-    expect(run("init", "--name", "Kev")).toBe(0);
+  it("init creates a machine key and an identity that verifies", async () => {
+    expect(await run("init", "--name", "Kev")).toBe(0);
 
     const credentials = store.load()!;
     const identity = verifyIdentityLog(credentials.identity);
@@ -39,8 +39,8 @@ describe("blether CLI", () => {
 
   it.skipIf(process.platform === "win32")(
     "keeps key files private to the user",
-    () => {
-      run("init", "--name", "Kev");
+    async () => {
+      await run("init", "--name", "Kev");
 
       expect(statSync(join(store.home, "machine-key.json")).mode & 0o777).toBe(
         0o600,
@@ -49,43 +49,46 @@ describe("blether CLI", () => {
     },
   );
 
-  it("init refuses to overwrite an existing identity", () => {
-    run("init", "--name", "Kev");
+  it("init refuses to overwrite an existing identity", async () => {
+    await run("init", "--name", "Kev");
     const before = store.load();
 
-    expect(run("init", "--name", "Someone else")).toBe(1);
+    expect(await run("init", "--name", "Someone else")).toBe(1);
     expect(store.load()).toEqual(before);
     expect(err.join("\n")).toContain("already a Blether identity");
   });
 
-  it("init requires a name", () => {
-    expect(run("init")).toBe(1);
+  it("init requires a name", async () => {
+    expect(await run("init")).toBe(1);
     expect(store.exists()).toBe(false);
   });
 
-  it("whoami shows the identity", () => {
-    run("init", "--name", "Kev");
+  it("whoami shows the identity", async () => {
+    await run("init", "--name", "Kev");
     out = [];
 
-    expect(run("whoami")).toBe(0);
+    expect(await run("whoami")).toBe(0);
     expect(out[0]).toBe("Name:     Kev");
   });
 
-  it("whoami explains when there is no identity yet", () => {
-    expect(run("whoami")).toBe(1);
+  it("whoami explains when there is no identity yet", async () => {
+    expect(await run("whoami")).toBe(1);
     expect(err.join("\n")).toContain("blether init");
   });
 
-  it("reports unknown options instead of crashing", () => {
-    expect(run("init", "--nmae", "Kev")).toBe(1);
+  it("reports unknown options instead of crashing", async () => {
+    expect(await run("init", "--nmae", "Kev")).toBe(1);
     expect(err.join("\n")).toContain("--nmae");
   });
 
-  it("rejects stored credentials whose key isn't in the identity", () => {
-    run("init", "--name", "Kev");
+  it("rejects stored credentials whose key isn't in the identity", async () => {
+    await run("init", "--name", "Kev");
     const other = new FileKeyStore(join(home, "other"));
     expect(
-      runCli(["init", "--name", "Other"], other, { out() {}, err() {} }),
+      await runCli(["init", "--name", "Other"], {
+        store: other,
+        io: { out() {}, err() {} },
+      }),
     ).toBe(0);
     store.save({
       machine: other.load()!.machine,

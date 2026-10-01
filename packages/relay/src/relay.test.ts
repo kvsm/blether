@@ -4,41 +4,65 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   RelayFrame,
+  acceptInvite,
   createIdentity,
+  createInvite,
+  createTeam,
   generateMachineKey,
   parseFrame,
   signChallenge,
   verifyIdentityLog,
+  verifyTeamLog,
+  type Identity,
   type IdentityLog,
   type MachineKey,
+  type SignedTeamEntry,
+  type Signer,
+  type Team,
+  type TeamLog,
 } from "@blether/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { startRelay, type Relay } from "./relay.js";
+import { startRelay, type Relay, type RelayOptions } from "./relay.js";
 
 type FrameOf<T extends RelayFrame["type"]> = Extract<RelayFrame, { type: T }>;
 
 interface Developer {
   machine: MachineKey;
   identity: IdentityLog;
+  signer: Signer;
 }
 
 function newDeveloper(name: string): Developer {
   const machine = generateMachineKey();
-  return { machine, identity: createIdentity(machine, name) };
+  const identity = createIdentity(machine, name);
+  return {
+    machine,
+    identity,
+    signer: { machine, identity: verifyIdentityLog(identity) },
+  };
 }
 
-/** The developer every test client acts for unless told otherwise. */
 const alice = newDeveloper("Alice");
 const bob = newDeveloper("Bob");
+const carol = newDeveloper("Carol");
+const identities = new Map<string, Identity>(
+  [alice, bob, carol].map((d) => [d.signer.identity.id, d.signer.identity]),
+);
+const verify = (log: TeamLog) => verifyTeamLog(log, identities);
 
-function helloFrame(agent: string, challenge: string, as: Developer) {
+interface Scope {
+  team?: string;
+  agent?: string;
+}
+
+function helloFrame(scope: Scope, challenge: string, as: Developer) {
   return {
     type: "hello",
-    agent,
+    ...scope,
     identity: as.identity,
     machine: as.machine.publicKey,
-    signature: signChallenge(as.machine, challenge, agent),
+    signature: signChallenge(as.machine, challenge, scope),
   };
 }
 
@@ -82,19 +106,26 @@ class TestClient {
     }
   }
 
-  /** Answers the relay's challenge as `agent` and returns its reply: welcome or error. */
-  async sayHello(agent: string, as: Developer = alice) {
+  /** Answers the relay's challenge and returns its reply: welcome or error. */
+  async sayHello(scope: Scope, as: Developer = alice) {
     const { challenge } = await this.next("challenge");
-    this.send(helloFrame(agent, challenge, as));
+    this.send(helloFrame(scope, challenge, as));
     return this.next();
   }
 
-  async hello(agent: string, as: Developer = alice) {
-    const reply = await this.sayHello(agent, as);
+  async hello(scope: Scope, as: Developer = alice) {
+    const reply = await this.sayHello(scope, as);
     if (reply.type !== "welcome") {
       throw new Error(`expected welcome, got ${JSON.stringify(reply)}`);
     }
     return reply;
+  }
+
+  /** Sends a team request and returns the reply: team or error. */
+  async teamRequest(frame: Record<string, unknown>) {
+    const requestId = randomUUID();
+    this.send({ ...frame, requestId });
+    return this.next();
   }
 
   /** Sends a message and waits for the relay to accept it. */
@@ -118,59 +149,112 @@ class TestClient {
   }
 }
 
-describe("relay", () => {
-  let relay: Relay;
+/** A relay hosting Alice's team, which Bob has joined and Carol hasn't, plus helpers. */
+function useRelay(options: RelayOptions = {}) {
+  const ctx = {} as { relay: Relay; team: Team; log: TeamLog };
   let clients: TestClient[] = [];
+
   const connect = async () => {
-    const client = await TestClient.connect(relay.url);
+    const client = await TestClient.connect(ctx.relay.url);
     clients.push(client);
     return client;
   };
-  /**
-   * Connects a session as `agent`, retrying while the relay still holds the
-   * agent for a session that has only just disconnected.
-   */
-  const connectAs = async (agent: string) => {
+
+  /** A CLI session (no team or agent) for `as`. */
+  const cli = async (as: Developer = alice) => {
+    const client = await connect();
+    await client.hello({}, as);
+    return client;
+  };
+
+  const append = async (entry: SignedTeamEntry, as: Developer) => {
+    const client = await cli(as);
+    const reply = await client.teamRequest({
+      type: "append-team",
+      team: ctx.team.id,
+      entry,
+    });
+    await client.close();
+    if (reply.type !== "team") throw new Error(JSON.stringify(reply));
+    ctx.log = reply.log;
+    ctx.team = verify(ctx.log);
+  };
+
+  /** Alice invites `as`, who accepts. */
+  const join = async (as: Developer) => {
+    const { entry, invite, secret } = createInvite(ctx.team, alice.signer);
+    await append(entry, alice);
+    await append(acceptInvite(ctx.team, invite, secret, as.signer), as);
+  };
+
+  /** Connects a session as `agent` in the team, retrying while a just-closed session still holds it. */
+  const connectAs = async (agent: string, as: Developer = alice) => {
     for (let attempt = 0; ; attempt++) {
       const client = await connect();
-      const reply = await client.sayHello(agent);
+      const reply = await client.sayHello({ team: ctx.team.id, agent }, as);
       if (reply.type === "welcome") return client;
       await client.close();
       if (attempt === 50) throw new Error(`could not connect as ${agent}`);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   };
+
   /** Connects a session as `agent` and disconnects it, so the relay knows the agent. */
-  const introduce = async (agent: string) => {
-    const client = await connect();
-    await client.hello(agent);
-    await client.close();
+  const introduce = async (agent: string, as: Developer = alice) => {
+    await (await connectAs(agent, as)).close();
   };
 
   beforeEach(async () => {
-    relay = await startRelay();
+    ctx.relay = await startRelay(options);
+    ctx.log = createTeam("backend", alice.signer);
+    const admin = await cli(alice);
+    const reply = await admin.teamRequest({
+      type: "create-team",
+      log: ctx.log,
+    });
+    if (reply.type !== "team") throw new Error(JSON.stringify(reply));
+    await admin.close();
+    ctx.team = verify(ctx.log);
+    await join(bob);
   });
   afterEach(async () => {
     await Promise.all(clients.map((c) => c.close()));
     clients = [];
-    await relay.close();
+    await ctx.relay.close();
   });
 
+  return { ctx, connect, cli, append, connectAs, introduce };
+}
+
+describe("relay", () => {
+  const { ctx, connect, cli, append, connectAs, introduce } = useRelay();
+  const inTeam = (agent: string) => ({ team: ctx.team.id, agent });
+
   describe("authentication", () => {
-    it("welcomes a session that signs the challenge with its developer's machine", async () => {
+    it("welcomes an agent session that signs the challenge with its developer's machine", async () => {
       const web = await connect();
 
-      expect(await web.hello("web")).toEqual({
+      expect(await web.hello(inTeam("web"))).toEqual({
         type: "welcome",
+        team: ctx.team.id,
         agent: "web",
-        developer: verifyIdentityLog(alice.identity).id,
+        developer: alice.signer.identity.id,
+      });
+    });
+
+    it("welcomes a CLI session that names no team or agent", async () => {
+      const session = await connect();
+
+      expect(await session.hello({})).toEqual({
+        type: "welcome",
+        developer: alice.signer.identity.id,
       });
     });
 
     it("refuses a signature of a different challenge", async () => {
       const web = await connect();
       await web.next("challenge");
-      web.send(helloFrame("web", "x".repeat(43), alice));
+      web.send(helloFrame(inTeam("web"), "x".repeat(43), alice));
 
       expect(await web.next("error")).toMatchObject({
         code: "authentication-failed",
@@ -180,9 +264,22 @@ describe("relay", () => {
     it("refuses a signature made for a different agent", async () => {
       const web = await connect();
       const { challenge } = await web.next("challenge");
-      web.send({ ...helloFrame("web", challenge, alice), agent: "api" });
+      web.send({
+        ...helloFrame(inTeam("web"), challenge, alice),
+        agent: "api",
+      });
 
       expect(await web.next("error")).toMatchObject({
+        code: "authentication-failed",
+      });
+    });
+
+    it("refuses a CLI session's signature reused to act as an agent", async () => {
+      const session = await connect();
+      const { challenge } = await session.next("challenge");
+      session.send({ ...helloFrame({}, challenge, alice), ...inTeam("web") });
+
+      expect(await session.next("error")).toMatchObject({
         code: "authentication-failed",
       });
     });
@@ -192,10 +289,7 @@ describe("relay", () => {
       const web = await connect();
 
       expect(
-        await web.sayHello("web", {
-          machine: intruder,
-          identity: alice.identity,
-        }),
+        await web.sayHello(inTeam("web"), { ...alice, machine: intruder }),
       ).toMatchObject({ code: "authentication-failed" });
     });
 
@@ -205,7 +299,7 @@ describe("relay", () => {
       const web = await connect();
 
       expect(
-        await web.sayHello("web", { machine: alice.machine, identity: forged }),
+        await web.sayHello(inTeam("web"), { ...alice, identity: forged }),
       ).toMatchObject({ code: "authentication-failed" });
     });
 
@@ -219,19 +313,12 @@ describe("relay", () => {
       });
     });
 
-    it("refuses to let another developer act as an agent someone already owns", async () => {
-      await introduce("api");
-      const impostor = await connect();
+    it("refuses a hello that names a team but no agent", async () => {
+      const web = await connect();
 
-      expect(await impostor.sayHello("api", bob)).toMatchObject({
-        code: "agent-owned-by-another",
+      expect(await web.sayHello({ team: ctx.team.id })).toMatchObject({
+        code: "malformed-frame",
       });
-    });
-
-    it("lets the owner act as their agent again", async () => {
-      await introduce("api");
-
-      await expect(connectAs("api")).resolves.toBeInstanceOf(TestClient);
     });
   });
 
@@ -248,9 +335,8 @@ describe("relay", () => {
     });
 
     it("refuses a second hello on the same connection", async () => {
-      const web = await connect();
-      await web.hello("web");
-      web.send(helloFrame("api", "stale-challenge", alice));
+      const web = await connectAs("web");
+      web.send(helloFrame(inTeam("api"), "stale-challenge", alice));
 
       expect(await web.next("error")).toMatchObject({
         code: "already-introduced",
@@ -258,18 +344,16 @@ describe("relay", () => {
     });
 
     it("refuses a second session for the same agent", async () => {
-      const first = await connect();
+      await connectAs("api");
       const second = await connect();
-      await first.hello("api");
 
-      expect(await second.sayHello("api")).toMatchObject({
+      expect(await second.sayHello(inTeam("api"))).toMatchObject({
         code: "agent-in-use",
       });
     });
 
     it("frees the agent name when its session disconnects", async () => {
-      const first = await connect();
-      await first.hello("api");
+      const first = await connectAs("api");
       await first.close();
 
       // The relay may notice the disconnect slightly after the client does.
@@ -286,12 +370,126 @@ describe("relay", () => {
     });
   });
 
-  describe("sending", () => {
-    it("delivers straight away to an agent with a session", async () => {
+  describe("team membership", () => {
+    it("refuses an agent session from someone who isn't a member", async () => {
+      const outsider = await connect();
+
+      expect(await outsider.sayHello(inTeam("web"), carol)).toMatchObject({
+        code: "not-a-member",
+      });
+    });
+
+    it("refuses an agent session for a team it doesn't host", async () => {
       const web = await connect();
-      const api = await connect();
-      await web.hello("web");
-      await api.hello("api");
+
+      expect(
+        await web.sayHello({ team: "n".repeat(43), agent: "web" }),
+      ).toMatchObject({ code: "unknown-team" });
+    });
+
+    it("lets a member who joined by invite act as an agent", async () => {
+      await expect(connectAs("ops", bob)).resolves.toBeInstanceOf(TestClient);
+    });
+
+    it("refuses to let another developer act as an agent someone already owns", async () => {
+      await introduce("api", alice);
+      const impostor = await connect();
+
+      expect(await impostor.sayHello(inTeam("api"), bob)).toMatchObject({
+        code: "agent-owned-by-another",
+      });
+    });
+
+    it("lets the owner act as their agent again", async () => {
+      await introduce("api");
+
+      await expect(connectAs("api")).resolves.toBeInstanceOf(TestClient);
+    });
+  });
+
+  describe("team logs", () => {
+    it("returns a team's log with the identities needed to verify it", async () => {
+      const session = await cli(carol);
+      const reply = await session.teamRequest({
+        type: "get-team",
+        team: ctx.team.id,
+      });
+      if (reply.type !== "team") throw new Error(JSON.stringify(reply));
+
+      const known = new Map(
+        reply.identities.map((log) => {
+          const identity = verifyIdentityLog(log);
+          return [identity.id, identity] as const;
+        }),
+      );
+      expect(verifyTeamLog(reply.log, known).members).toEqual([
+        alice.signer.identity.id,
+        bob.signer.identity.id,
+      ]);
+    });
+
+    it("refuses a new team whose log isn't a single entry by the session's developer", async () => {
+      const session = await cli(bob);
+
+      expect(
+        await session.teamRequest({
+          type: "create-team",
+          log: createTeam("frontend", alice.signer),
+        }),
+      ).toMatchObject({ type: "error", code: "team-rejected" });
+    });
+
+    it("refuses an entry that doesn't extend the current log", async () => {
+      const stale = createInvite(verify(ctx.log.slice(0, 1)), alice.signer);
+      const session = await cli(alice);
+
+      expect(
+        await session.teamRequest({
+          type: "append-team",
+          team: ctx.team.id,
+          entry: stale.entry,
+        }),
+      ).toMatchObject({ type: "error", code: "team-conflict" });
+    });
+
+    it("refuses an entry authored by someone other than the session's developer", async () => {
+      const { entry } = createInvite(ctx.team, alice.signer);
+      const session = await cli(bob);
+
+      expect(
+        await session.teamRequest({
+          type: "append-team",
+          team: ctx.team.id,
+          entry,
+        }),
+      ).toMatchObject({ type: "error", code: "team-rejected" });
+    });
+
+    it("refuses a join that doesn't prove it holds the invite secret", async () => {
+      const { entry, invite } = createInvite(ctx.team, alice.signer);
+      await append(entry, alice);
+      const guess = acceptInvite(
+        ctx.team,
+        invite,
+        "s".repeat(43),
+        carol.signer,
+      );
+      const session = await cli(carol);
+
+      expect(
+        await session.teamRequest({
+          type: "append-team",
+          team: ctx.team.id,
+          entry: guess,
+        }),
+      ).toMatchObject({ type: "error", code: "team-rejected" });
+    });
+  });
+
+  describe("messaging", () => {
+    it("delivers straight away to an agent with a session", async () => {
+      const web = await connectAs("web");
+      const api = await connectAs("api", bob);
 
       const sent = await web.message("api", "is /users changing?");
 
@@ -307,10 +505,8 @@ describe("relay", () => {
     });
 
     it("stamps the sender from the connection, not the frame", async () => {
-      const web = await connect();
-      const api = await connect();
-      await web.hello("web");
-      await api.hello("api");
+      const web = await connectAs("web");
+      const api = await connectAs("api", bob);
 
       web.send({
         type: "send",
@@ -323,10 +519,8 @@ describe("relay", () => {
       expect((await api.next("deliver")).message.from).toBe("web");
     });
 
-    it("refuses a message to an agent that has never had a session", async () => {
-      const web = await connect();
-      await web.hello("web");
-
+    it("refuses a message to an agent the team doesn't have", async () => {
+      const web = await connectAs("web");
       const id = randomUUID();
       web.send({ type: "send", id, to: "apii", body: "typo?" });
 
@@ -337,9 +531,8 @@ describe("relay", () => {
     });
 
     it("refuses a reused message id", async () => {
-      const web = await connect();
-      await web.hello("web");
       await introduce("api");
+      const web = await connectAs("web");
       const { id } = await web.message("api", "first");
 
       web.send({ type: "send", id, to: "api", body: "second" });
@@ -349,32 +542,64 @@ describe("relay", () => {
         code: "duplicate-id",
       });
     });
+
+    it("refuses messages from a CLI session", async () => {
+      const session = await cli();
+      const id = randomUUID();
+      session.send({ type: "send", id, to: "api", body: "hi" });
+
+      expect(await session.next("error")).toMatchObject({
+        id,
+        code: "no-agent",
+      });
+    });
+
+    it("never delivers across teams, even to an agent with the same name", async () => {
+      const otherLog = createTeam("frontend", alice.signer);
+      const admin = await cli(alice);
+      await admin.teamRequest({ type: "create-team", log: otherLog });
+      const apiElsewhere = await connect();
+      await apiElsewhere.hello({ team: verify(otherLog).id, agent: "api" });
+      const web = await connectAs("web");
+
+      const id = randomUUID();
+      web.send({ type: "send", id, to: "api", body: "wrong team?" });
+      expect(await web.next("error")).toMatchObject({
+        id,
+        code: "unknown-agent",
+      });
+
+      const api = await connectAs("api");
+      await web.message("api", "right team");
+      expect((await api.next("deliver")).message.body).toBe("right team");
+      const stray = await Promise.race([
+        apiElsewhere.next("deliver"),
+        new Promise((resolve) => setTimeout(() => resolve("nothing"), 100)),
+      ]);
+      expect(stray).toBe("nothing");
+    });
   });
 
   describe("mailboxes", () => {
     it("queues messages for an offline agent and delivers them, in order, when it next connects", async () => {
       await introduce("api");
-      const web = await connect();
-      await web.hello("web");
+      const web = await connectAs("web");
 
       const first = await web.message("api", "first");
       const second = await web.message("api", "second");
       expect([first.status, second.status]).toEqual(["queued", "queued"]);
 
-      const api = await connect();
-      await api.hello("api");
+      const api = await connectAs("api");
       expect((await api.next("deliver")).message.body).toBe("first");
       expect((await api.next("deliver")).message.body).toBe("second");
     });
 
     it("delivers unread messages again to the agent's next session", async () => {
       await introduce("api");
-      const web = await connect();
-      await web.hello("web");
+      const web = await connectAs("web");
       const { id } = await web.message("api", "did you see this?");
 
-      const firstSession = await connect();
-      await firstSession.hello("api");
+      const firstSession = await connectAs("api");
       await firstSession.next("deliver");
       await firstSession.close();
 
@@ -384,15 +609,12 @@ describe("relay", () => {
 
     it("doesn't deliver messages again once they've been read", async () => {
       await introduce("api");
-      const web = await connect();
-      await web.hello("web");
+      const web = await connectAs("web");
       const read = await web.message("api", "read me");
 
-      const firstSession = await connect();
-      await firstSession.hello("api");
+      const firstSession = await connectAs("api");
       await firstSession.next("deliver");
       firstSession.send({ type: "read", ids: [read.id] });
-      // Wait until the relay has processed the read before disconnecting.
       await expect
         .poll(async () => (await web.listSent())[0]?.status)
         .toBe("read");
@@ -405,12 +627,10 @@ describe("relay", () => {
 
     it("only lets an agent mark its own messages read", async () => {
       await introduce("api");
-      const web = await connect();
-      await web.hello("web");
+      const web = await connectAs("web");
       const { id } = await web.message("api", "for api only");
 
-      const intruder = await connect();
-      await intruder.hello("ops", bob);
+      const intruder = await connectAs("ops", bob);
       intruder.send({ type: "read", ids: [id] });
 
       await expect
@@ -420,16 +640,14 @@ describe("relay", () => {
 
     it("reports delivery status to the sender as queued, then delivered, then read", async () => {
       await introduce("api");
-      const web = await connect();
-      await web.hello("web");
+      const web = await connectAs("web");
       const { id } = await web.message("api", "status please");
 
       expect(await web.listSent()).toEqual([
         { id, to: "api", sentAt: expect.any(String), status: "queued" },
       ]);
 
-      const api = await connect();
-      await api.hello("api");
+      const api = await connectAs("api");
       await api.next("deliver");
       expect((await web.listSent())[0]?.status).toBe("delivered");
 
@@ -441,8 +659,7 @@ describe("relay", () => {
 
     it("lists the most recently sent messages first, up to the limit", async () => {
       await introduce("api");
-      const web = await connect();
-      await web.hello("web");
+      const web = await connectAs("web");
       await web.message("api", "one");
       const two = await web.message("api", "two");
       const three = await web.message("api", "three");
@@ -455,6 +672,31 @@ describe("relay", () => {
   });
 });
 
+describe("relay invite expiry", () => {
+  let clock = new Date();
+  const { ctx, cli, append } = useRelay({ now: () => clock });
+
+  it("refuses a join after the invite has expired by the relay's clock", async () => {
+    clock = new Date();
+    const { entry, invite, secret } = createInvite(ctx.team, alice.signer, {
+      ttlHours: 1,
+    });
+    await append(entry, alice);
+    // Carol's entry claims to be on time, but the relay goes by its own clock.
+    const join = acceptInvite(ctx.team, invite, secret, carol.signer);
+    clock = new Date(Date.now() + 2 * 3_600_000);
+    const session = await cli(carol);
+
+    expect(
+      await session.teamRequest({
+        type: "append-team",
+        team: ctx.team.id,
+        entry: join,
+      }),
+    ).toMatchObject({ type: "error", code: "team-rejected" });
+  });
+});
+
 describe("relay persistence", () => {
   let dir: string;
   beforeEach(() => {
@@ -464,15 +706,21 @@ describe("relay persistence", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("keeps mailboxes across a restart", async () => {
+  it("keeps teams and mailboxes across a restart", async () => {
     const databasePath = join(dir, "relay.db");
+    const log = createTeam("backend", alice.signer);
+    const team = verify(log).id;
 
     const before = await startRelay({ databasePath });
+    const admin = await TestClient.connect(before.url);
+    await admin.hello({});
+    await admin.teamRequest({ type: "create-team", log });
+    await admin.close();
     const api = await TestClient.connect(before.url);
-    await api.hello("api");
+    await api.hello({ team, agent: "api" });
     await api.close();
     const web = await TestClient.connect(before.url);
-    await web.hello("web");
+    await web.hello({ team, agent: "web" });
     const { id } = await web.message("api", "survive the restart");
     await web.close();
     await before.close();
@@ -480,7 +728,7 @@ describe("relay persistence", () => {
     const after = await startRelay({ databasePath });
     try {
       const apiAgain = await TestClient.connect(after.url);
-      await apiAgain.hello("api");
+      await apiAgain.hello({ team, agent: "api" });
       expect((await apiAgain.next("deliver")).message).toMatchObject({
         id,
         body: "survive the restart",

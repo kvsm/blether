@@ -2,15 +2,19 @@ import type { AddressInfo } from "node:net";
 import {
   ClientFrame,
   IdentityError,
+  TeamError,
   parseFrame,
   randomToken,
   verifyChallenge,
   verifyIdentityLog,
+  verifyTeamLog,
   type AgentName,
-  type Identity,
   type ErrorCode,
+  type Identity,
   type Message,
   type RelayFrame,
+  type Team,
+  type TeamLog,
 } from "@blether/protocol";
 import { WebSocketServer, type WebSocket } from "ws";
 import { MailboxStore } from "./mailbox-store.js";
@@ -21,6 +25,8 @@ export interface RelayOptions {
   host?: string;
   /** Path of the mailbox database. Defaults to an in-memory store. */
   databasePath?: string;
+  /** Clock used to enforce invite expiry. */
+  now?: () => Date;
 }
 
 export interface Relay {
@@ -29,17 +35,28 @@ export interface Relay {
   close(): Promise<void>;
 }
 
+/** The team and agent an authenticated bridge session acts as. */
+interface AgentScope {
+  team: string;
+  agent: AgentName;
+}
+
+const sessionKey = ({ team, agent }: AgentScope) => `${team}\n${agent}`;
+
 /**
- * Starts a relay that holds agents' mailboxes and passes messages between
- * connected bridges.
+ * Starts a relay that holds teams' membership logs and agents' mailboxes, and
+ * passes messages between connected bridges.
  *
- * Every session must prove which developer it belongs to (see the protocol's
- * auth.ts). There are no teams or encryption yet. Until agents are created
- * deliberately (#8), the first developer to act as an agent name owns it, and
- * any agent a session has ever acted as can be messaged.
+ * Every session proves which developer it belongs to (see the protocol's
+ * auth.ts). A bridge session names a team and an agent; the relay only
+ * accepts it from a member of the team, and its messages never leave the
+ * team. A CLI session names neither, and can only read and extend team logs.
+ * There is no encryption yet. Until agents are created deliberately (#8), the
+ * first developer to act as an agent name in a team owns it.
  */
 export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const store = new MailboxStore(options.databasePath ?? ":memory:");
+  const now = options.now ?? (() => new Date());
   const wss = new WebSocketServer({
     port: options.port ?? 0,
     host: options.host ?? "127.0.0.1",
@@ -49,7 +66,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     wss.once("error", reject);
   });
 
-  const sessions = new Map<AgentName, WebSocket>();
+  const sessions = new Map<string, WebSocket>();
 
   const deliver = (socket: WebSocket, message: Message) => {
     const frame: RelayFrame = { type: "deliver", message };
@@ -57,9 +74,27 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     store.markDelivered(message.id);
   };
 
+  /** Verifies a team log using the identities the relay holds for its authors. */
+  const verifyTeam = (log: TeamLog): Team => {
+    const identities = new Map<string, Identity>();
+    for (const identityLog of store.developerLogs(log.map((e) => e.author))) {
+      const identity = verifyIdentityLog(identityLog);
+      identities.set(identity.id, identity);
+    }
+    return verifyTeamLog(log, identities);
+  };
+
+  const teamReply = (requestId: string, log: TeamLog): RelayFrame => ({
+    type: "team",
+    requestId,
+    log,
+    identities: store.developerLogs(log.map((e) => e.author)),
+  });
+
   wss.on("connection", (socket) => {
-    let agent: AgentName | undefined;
     const challenge = randomToken();
+    let developer: Identity | undefined;
+    let scope: AgentScope | undefined;
 
     const send = (frame: RelayFrame) => socket.send(JSON.stringify(frame));
     const fail = (code: ErrorCode, message: string, id?: string) =>
@@ -82,24 +117,31 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
       }
 
       if (frame.type === "hello") {
-        if (agent) {
-          fail("already-introduced", `This connection is already ${agent}.`);
+        if (developer) {
+          fail("already-introduced", "This connection has already said hello.");
           return;
         }
-        let developer: Identity;
+        if (!frame.team !== !frame.agent) {
+          refuse(
+            "malformed-frame",
+            "A hello names both a team and an agent, or neither.",
+          );
+          return;
+        }
+        let identity: Identity;
         try {
-          developer = verifyIdentityLog(frame.identity);
+          identity = verifyIdentityLog(frame.identity);
         } catch (error) {
           if (!(error instanceof IdentityError)) throw error;
           refuse("authentication-failed", error.message);
           return;
         }
         if (
-          !developer.machines.includes(frame.machine) ||
+          !identity.machines.includes(frame.machine) ||
           !verifyChallenge(
             frame.machine,
             challenge,
-            frame.agent,
+            { team: frame.team, agent: frame.agent },
             frame.signature,
           )
         ) {
@@ -109,34 +151,178 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           );
           return;
         }
-        const owner = store.agentOwner(frame.agent);
-        if (owner && owner !== developer.id) {
-          refuse(
-            "agent-owned-by-another",
-            `${frame.agent} belongs to another developer.`,
-          );
-          return;
+        store.saveDeveloper(identity, frame.identity);
+
+        if (frame.team && frame.agent) {
+          const requested = { team: frame.team, agent: frame.agent };
+          const log = store.teamLog(requested.team);
+          if (!log) {
+            refuse("unknown-team", "This relay has no such team.");
+            return;
+          }
+          if (!verifyTeam(log).members.includes(identity.id)) {
+            refuse("not-a-member", "You aren't a member of this team.");
+            return;
+          }
+          const owner = store.agentOwner(requested.team, requested.agent);
+          if (owner && owner !== identity.id) {
+            refuse(
+              "agent-owned-by-another",
+              `${requested.agent} belongs to another developer.`,
+            );
+            return;
+          }
+          if (sessions.has(sessionKey(requested))) {
+            refuse(
+              "agent-in-use",
+              `Another session is already acting as ${requested.agent}.`,
+            );
+            return;
+          }
+          store.claimAgent(requested.team, requested.agent, identity.id);
+          scope = requested;
+          sessions.set(sessionKey(scope), socket);
         }
-        if (sessions.has(frame.agent)) {
-          refuse(
-            "agent-in-use",
-            `Another session is already acting as ${frame.agent}.`,
-          );
-          return;
+
+        developer = identity;
+        send({
+          type: "welcome",
+          developer: identity.id,
+          ...(scope ? { team: scope.team, agent: scope.agent } : {}),
+        });
+        if (scope) {
+          for (const message of store.unread(scope.team, scope.agent)) {
+            deliver(socket, message);
+          }
         }
-        store.saveDeveloper(developer, frame.identity);
-        store.claimAgent(frame.agent, developer.id);
-        agent = frame.agent;
-        sessions.set(agent, socket);
-        send({ type: "welcome", agent, developer: developer.id });
-        for (const message of store.unread(agent)) deliver(socket, message);
         return;
       }
 
-      if (!agent) {
+      if (!developer) {
         fail(
           "not-introduced",
           "Send hello first.",
+          "id" in frame
+            ? frame.id
+            : "requestId" in frame
+              ? frame.requestId
+              : undefined,
+        );
+        return;
+      }
+
+      switch (frame.type) {
+        case "create-team": {
+          const [first] = frame.log;
+          if (frame.log.length !== 1 || first!.author !== developer.id) {
+            fail(
+              "team-rejected",
+              "A new team's log is a single team-created entry by you.",
+              frame.requestId,
+            );
+            return;
+          }
+          let team: Team;
+          try {
+            team = verifyTeam(frame.log);
+          } catch (error) {
+            if (!(error instanceof TeamError)) throw error;
+            fail("team-rejected", error.message, frame.requestId);
+            return;
+          }
+          if (!store.createTeam(team.id, frame.log)) {
+            fail("team-conflict", "That team already exists.", frame.requestId);
+            return;
+          }
+          send(teamReply(frame.requestId, frame.log));
+          return;
+        }
+
+        case "get-team": {
+          const log = store.teamLog(frame.team);
+          if (!log) {
+            fail(
+              "unknown-team",
+              "This relay has no such team.",
+              frame.requestId,
+            );
+            return;
+          }
+          send(teamReply(frame.requestId, log));
+          return;
+        }
+
+        case "append-team": {
+          const current = store.teamLog(frame.team);
+          if (!current) {
+            fail(
+              "unknown-team",
+              "This relay has no such team.",
+              frame.requestId,
+            );
+            return;
+          }
+          if (frame.entry.author !== developer.id) {
+            fail(
+              "team-rejected",
+              "You can only append entries you author.",
+              frame.requestId,
+            );
+            return;
+          }
+          let before: Team;
+          try {
+            before = verifyTeam(current);
+          } catch (error) {
+            if (!(error instanceof TeamError)) throw error;
+            fail("team-rejected", error.message, frame.requestId);
+            return;
+          }
+          if (frame.entry.prev !== before.head) {
+            fail(
+              "team-conflict",
+              "The team log has changed since you read it. Fetch it and try again.",
+              frame.requestId,
+            );
+            return;
+          }
+          const { entry } = frame.entry;
+          if (entry.type === "member-added") {
+            const invite = before.invites.find((i) => i.id === entry.invite);
+            if (invite && now().toISOString() > invite.expiresAt) {
+              fail(
+                "team-rejected",
+                "This invite has expired.",
+                frame.requestId,
+              );
+              return;
+            }
+          }
+          const log = [...current, frame.entry];
+          try {
+            verifyTeam(log);
+          } catch (error) {
+            if (!(error instanceof TeamError)) throw error;
+            fail("team-rejected", error.message, frame.requestId);
+            return;
+          }
+          if (!store.updateTeam(frame.team, log, current.length)) {
+            fail(
+              "team-conflict",
+              "The team log has changed since you read it. Fetch it and try again.",
+              frame.requestId,
+            );
+            return;
+          }
+          send(teamReply(frame.requestId, log));
+          return;
+        }
+      }
+
+      if (!scope) {
+        fail(
+          "no-agent",
+          "This session isn't acting as an agent.",
           frame.type === "send" ? frame.id : undefined,
         );
         return;
@@ -144,22 +330,22 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
 
       switch (frame.type) {
         case "send": {
-          if (!store.agentOwner(frame.to)) {
+          if (!store.agentOwner(scope.team, frame.to)) {
             fail(
               "unknown-agent",
-              `There is no agent called ${frame.to}.`,
+              `There is no agent called ${frame.to} in this team.`,
               frame.id,
             );
             return;
           }
           const message: Message = {
             id: frame.id,
-            from: agent,
+            from: scope.agent,
             to: frame.to,
             body: frame.body,
-            sentAt: new Date().toISOString(),
+            sentAt: now().toISOString(),
           };
-          if (!store.add(message)) {
+          if (!store.add(scope.team, message)) {
             fail(
               "duplicate-id",
               `A message with id ${frame.id} already exists.`,
@@ -167,7 +353,9 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             );
             return;
           }
-          const recipient = sessions.get(frame.to);
+          const recipient = sessions.get(
+            sessionKey({ team: scope.team, agent: frame.to }),
+          );
           if (recipient) deliver(recipient, message);
           send({
             type: "sent",
@@ -177,20 +365,22 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           return;
         }
         case "read":
-          store.markRead(agent, frame.ids);
+          store.markRead(scope.team, scope.agent, frame.ids);
           return;
         case "list-sent":
           send({
             type: "sent-list",
             requestId: frame.requestId,
-            messages: store.sentBy(agent, frame.limit),
+            messages: store.sentBy(scope.team, scope.agent, frame.limit),
           });
           return;
       }
     });
 
     socket.on("close", () => {
-      if (agent && sessions.get(agent) === socket) sessions.delete(agent);
+      if (scope && sessions.get(sessionKey(scope)) === socket) {
+        sessions.delete(sessionKey(scope));
+      }
     });
   });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { AgentName } from "@blether/protocol";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { FileKeyStore } from "./keystore.js";
+import { FileKeyStore, TeamDirectory } from "./keystore.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer } from "./server.js";
 
@@ -11,7 +11,6 @@ const fail = (message: string): never => {
   process.exit(1);
 };
 
-const relayUrl = process.env.BLETHER_RELAY_URL ?? "ws://127.0.0.1:7357";
 const agent = AgentName.safeParse(process.env.BLETHER_AGENT);
 if (!agent.success) {
   fail(
@@ -24,21 +23,31 @@ const credentials =
   fail(
     `No Blether identity in ${store.home}. Run \`blether init --name "<your name>"\` first.`,
   );
+const teamName = process.env.BLETHER_TEAM;
+if (!teamName) {
+  fail(
+    "Set BLETHER_TEAM to the team this agent belongs to. Run `blether team list` to see your teams.",
+  );
+}
+const team =
+  new TeamDirectory(store.home).get(teamName!) ??
+  fail(
+    `You aren't in a team called ${teamName}. Run \`blether team list\` to see your teams.`,
+  );
 
 console.error(
-  `blether bridge acting as ${agent.data} via ${relayUrl}\n` +
-    "WARNING: no teams or encryption yet. Any developer known to the relay can message this agent.",
+  `blether bridge acting as ${agent.data} in team ${team.name} via ${team.relayUrl}\n` +
+    "WARNING: messages aren't end-to-end encrypted yet; the relay can read them.",
 );
 
-const relay = await RelayConnection.connect(
-  relayUrl,
-  agent.data!,
-  credentials,
-).catch((error: unknown) =>
+const relay = await RelayConnection.connect(team.relayUrl, credentials, {
+  team: team.id,
+  agent: agent.data!,
+}).catch((error: unknown) =>
   fail(
     error instanceof RelayError
       ? `The relay refused this session (${error.code}): ${error.message}`
-      : `Couldn't connect to the relay at ${relayUrl}: ${(error as Error).message}`,
+      : `Couldn't connect to the relay at ${team.relayUrl}: ${(error as Error).message}`,
   ),
 );
 const server = createBridgeServer(relay);

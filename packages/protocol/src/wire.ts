@@ -1,15 +1,20 @@
 import { z } from "zod";
 import { PublicKey, Signature } from "./crypto.js";
 import { IdentityLog } from "./identity.js";
+import { SignedTeamEntry, TeamLog } from "./team.js";
 
 /**
  * Frames exchanged between a bridge and the relay over a WebSocket, one JSON
  * object per WebSocket message.
  *
- * On connecting, the relay sends a `challenge`. The bridge answers with
+ * On connecting, the relay sends a `challenge`. The client answers with
  * `hello`, carrying its developer's identity log and a signature of the
- * challenge by one of that identity's machines (see auth.ts). There are no
- * teams or encryption yet.
+ * challenge by one of that identity's machines (see auth.ts).
+ *
+ * A bridge's hello names a team and an agent: the session then acts as that
+ * agent and can message other agents in the team. The CLI's hello names
+ * neither: the session can only read and extend team membership logs. There
+ * is no encryption yet.
  *
  * A session receives every message still unread in its agent's mailbox when
  * it says hello, so a bridge may see the same message again after
@@ -49,10 +54,11 @@ export type SentMessage = z.infer<typeof SentMessage>;
 
 /** Frames a bridge sends to the relay. */
 export const ClientFrame = z.discriminatedUnion("type", [
-  /** First frame on a connection: the session starts acting as `agent`. */
+  /** First frame on a connection. `agent` requires `team`. */
   z.object({
     type: z.literal("hello"),
-    agent: AgentName,
+    team: z.string().optional(),
+    agent: AgentName.optional(),
     identity: IdentityLog,
     machine: PublicKey,
     signature: Signature,
@@ -71,6 +77,24 @@ export const ClientFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     limit: z.number().int().min(1).max(100),
   }),
+  /** Starts a team; `log` is its single team-created entry. */
+  z.object({
+    type: z.literal("create-team"),
+    requestId: z.uuid(),
+    log: TeamLog,
+  }),
+  z.object({
+    type: z.literal("get-team"),
+    requestId: z.uuid(),
+    team: z.string(),
+  }),
+  /** Appends an entry; it must extend the log's current head. */
+  z.object({
+    type: z.literal("append-team"),
+    requestId: z.uuid(),
+    team: z.string(),
+    entry: SignedTeamEntry,
+  }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 
@@ -78,6 +102,11 @@ export const ErrorCode = z.enum([
   "malformed-frame",
   "authentication-failed",
   "agent-owned-by-another",
+  "not-a-member",
+  "unknown-team",
+  "team-rejected",
+  "team-conflict",
+  "no-agent",
   "not-introduced",
   "already-introduced",
   "agent-in-use",
@@ -92,7 +121,8 @@ export const RelayFrame = z.discriminatedUnion("type", [
   z.object({ type: z.literal("challenge"), challenge: z.string().min(32) }),
   z.object({
     type: z.literal("welcome"),
-    agent: AgentName,
+    team: z.string().optional(),
+    agent: AgentName.optional(),
     /** The authenticated developer's identity id. */
     developer: z.string(),
   }),
@@ -109,7 +139,17 @@ export const RelayFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     messages: z.array(SentMessage),
   }),
-  /** `id` refers to the `send` frame that failed, when there is one. */
+  /**
+   * Reply to create-team, get-team and append-team: the team's whole log,
+   * with the identity log of every author so the client can verify it.
+   */
+  z.object({
+    type: z.literal("team"),
+    requestId: z.uuid(),
+    log: TeamLog,
+    identities: z.array(IdentityLog),
+  }),
+  /** `id` is the id of the send, or the requestId of the request, that failed. */
   z.object({
     type: z.literal("error"),
     id: z.uuid().optional(),
