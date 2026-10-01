@@ -10,10 +10,15 @@
       "default": "./dist/index.js"
     }
   },
+  "bin": {
+    "blether-relay": "./dist/bin.js"
+  },
   "files": [
     "dist"
   ],
   "dependencies": {
-    "@blether/protocol": "workspace:*"
+    "@blether/protocol": "workspace:*",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
   }
 }

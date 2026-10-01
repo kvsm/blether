@@ -1,4 +1,1 @@
-import { ENVELOPE_VERSION } from "@blether/protocol";
-
-/** Envelope version this relay accepts. */
-export const relayEnvelopeVersion = ENVELOPE_VERSION;
+export { startRelay, type Relay, type RelayOptions } from "./relay.js";
