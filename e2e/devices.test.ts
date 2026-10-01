@@ -1,92 +1,16 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  FileKeyStore,
-  RelayConnection,
-  TeamDirectory,
-  createBridgeServer,
-  runCli,
-} from "@blether/bridge";
-import { verifyIdentityLog } from "@blether/protocol";
 import { startRelay, type Relay } from "@blether/relay";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-/** One device: its own BLETHER_HOME, driven through the CLI. */
-function device(root: string, name: string) {
-  const store = new FileKeyStore(join(root, name));
-  const teams = new TeamDirectory(store.home);
-  let answer = true;
-  const run = async (...argv: string[]) => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const code = await runCli(argv, {
-      store,
-      teams,
-      io: {
-        out: (l) => out.push(l),
-        err: (l) => err.push(l),
-        confirm: async () => answer,
-      },
-    });
-    return { code, out: out.join("\n"), err: err.join("\n") };
-  };
-  const printed = async (pattern: RegExp, ...argv: string[]) => {
-    const result = await run(...argv);
-    const match = pattern.exec(result.out)?.[0];
-    if (result.code !== 0 || !match) {
-      throw new Error(`${argv.join(" ")} failed: ${result.err || result.out}`);
-    }
-    return match;
-  };
-  return {
-    store,
-    teams,
-    run,
-    /** What the developer answers when asked to confirm a fingerprint. */
-    answer(value: boolean) {
-      answer = value;
-    },
-    request: () => printed(/blether-device:\S+/, "device", "request"),
-    add: (request: string, ...flags: string[]) =>
-      printed(/blether-grant:\S+/, "device", "add", request, ...flags),
-    invite: (team: string) => printed(/blether(\+ws)?:\/\/\S+/, "invite", team),
-    devices: () => verifyIdentityLog(store.load()!.identity).devices.length,
-    /** An MCP session for one of this developer's agents in `team`. */
-    async session(team: string, agent: string) {
-      const record = teams.get(team)!;
-      const connection = await RelayConnection.connect(
-        record.relayUrl,
-        store.load()!,
-        { scope: { team: record.id, agent } },
-      );
-      const client = new Client({ name: agent, version: "0.0.0" });
-      const [a, b] = InMemoryTransport.createLinkedPair();
-      await createBridgeServer(connection).connect(b);
-      await client.connect(a);
-      const call = async (tool: string, args: Record<string, unknown> = {}) => {
-        const result = await client.callTool({ name: tool, arguments: args });
-        return (result.content as { text: string }[])[0]?.text ?? "";
-      };
-      return {
-        call,
-        close: async () => {
-          await client.close();
-          await connection.close();
-        },
-      };
-    },
-  };
-}
+import { device, type Device } from "./support.js";
 
 describe("adding a device through the blether CLI", () => {
   let relay: Relay;
   let root: string;
-  let desktop: ReturnType<typeof device>;
-  let laptop: ReturnType<typeof device>;
-  let carol: ReturnType<typeof device>;
+  let desktop: Device;
+  let laptop: Device;
+  let carol: Device;
   const cleanups: (() => Promise<void>)[] = [];
 
   beforeEach(async () => {
@@ -115,6 +39,8 @@ describe("adding a device through the blether CLI", () => {
     expect(accepted.out).toContain("Teams: backend");
     expect(laptop.devices()).toBe(2);
 
+    await laptop.run("agent", "create", "backend", "web");
+    await carol.run("agent", "create", "backend", "api");
     const web = await laptop.session("backend", "web");
     const api = await carol.session("backend", "api");
     cleanups.push(web.close, api.close);

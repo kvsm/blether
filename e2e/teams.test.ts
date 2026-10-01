@@ -1,83 +1,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  FileKeyStore,
-  RelayConnection,
-  RelayError,
-  TeamDirectory,
-  createBridgeServer,
-  runCli,
-} from "@blether/bridge";
+import { RelayConnection, RelayError } from "@blether/bridge";
 import { startRelay, type Relay } from "@blether/relay";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-/** One developer's device: their own BLETHER_HOME, driven through the CLI. */
-function device(root: string, name: string) {
-  const store = new FileKeyStore(join(root, name));
-  const teams = new TeamDirectory(store.home);
-  let clock: Date | undefined;
-  const run = async (...argv: string[]) => {
-    const out: string[] = [];
-    const err: string[] = [];
-    const code = await runCli(argv, {
-      store,
-      teams,
-      io: { out: (l) => out.push(l), err: (l) => err.push(l) },
-      ...(clock ? { now: () => clock! } : {}),
-    });
-    return { code, out: out.join("\n"), err: err.join("\n") };
-  };
-  return {
-    store,
-    teams,
-    run,
-    setClock(date: Date) {
-      clock = date;
-    },
-    /** Runs `blether invite` and returns the invite string it printed. */
-    async invite(team: string, ...flags: string[]) {
-      const result = await run("invite", team, ...flags);
-      if (result.code !== 0) throw new Error(result.err);
-      const link = /blether(\+ws)?:\/\/\S+/.exec(result.out)?.[0];
-      if (!link) throw new Error(`no invite in: ${result.out}`);
-      return link;
-    },
-    /** An MCP session for one of this developer's agents in `team`. */
-    async session(team: string, agent: string) {
-      const record = teams.get(team)!;
-      const connection = await RelayConnection.connect(
-        record.relayUrl,
-        store.load()!,
-        { scope: { team: record.id, agent } },
-      );
-      const client = new Client({ name: agent, version: "0.0.0" });
-      const [a, b] = InMemoryTransport.createLinkedPair();
-      await createBridgeServer(connection).connect(b);
-      await client.connect(a);
-      const call = async (tool: string, args: Record<string, unknown> = {}) => {
-        const result = await client.callTool({ name: tool, arguments: args });
-        return (result.content as { text: string }[])[0]?.text ?? "";
-      };
-      return {
-        call,
-        close: async () => {
-          await client.close();
-          await connection.close();
-        },
-      };
-    },
-  };
-}
+import { device, type Device } from "./support.js";
 
 describe("teams through the blether CLI", () => {
   let relay: Relay;
   let root: string;
-  let kev: ReturnType<typeof device>;
-  let carol: ReturnType<typeof device>;
-  let mallory: ReturnType<typeof device>;
+  let kev: Device;
+  let carol: Device;
+  let mallory: Device;
   const cleanups: (() => Promise<void>)[] = [];
 
   beforeEach(async () => {
@@ -117,6 +51,8 @@ describe("teams through the blether CLI", () => {
     const members = await carol.run("team", "members", "backend");
     expect(members.out).toBe("Team backend:\n  Kev (Team Admin)\n  Carol");
 
+    await kev.run("agent", "create", "backend", "web");
+    await carol.run("agent", "create", "backend", "api");
     const web = await kev.session("backend", "web");
     const api = await carol.session("backend", "api");
     cleanups.push(web.close, api.close);
