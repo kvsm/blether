@@ -67,7 +67,19 @@ export const CLAUDE_CHANNEL_NOTIFICATION = "notifications/claude/channel";
  * The MCP server a bridge runs when it can't start: no messaging tools, just
  * an explanation of `problem` the agent can pass on to its developer.
  */
-export function createSetupProblemServer(problem: string): McpServer {
+export function createSetupProblemServer(
+  problem: string,
+  {
+    takeOver,
+  }: {
+    /**
+     * Offered when another session is acting as the agent: takes the agent
+     * over and installs the bridge's tools on this server. Resolves to what
+     * to tell the agent.
+     */
+    takeOver?: (server: McpServer) => Promise<string>;
+  } = {},
+): McpServer {
   const explanation = `Blether isn't working in this session: ${problem}`;
   const server = new McpServer(
     { name: "blether", version: "0.0.0" },
@@ -75,9 +87,12 @@ export function createSetupProblemServer(problem: string): McpServer {
       instructions:
         `${explanation} Blether's messaging tools are unavailable until this is fixed. ` +
         "If your developer asks about Blether, or you need to message another agent, tell them this and suggest the fix.",
+      // Declared up front so a session that takes its agent over can still
+      // receive channel notices.
+      capabilities: { experimental: { [CLAUDE_CHANNEL]: {} } },
     },
   );
-  server.registerTool(
+  const status = server.registerTool(
     "blether_status",
     {
       title: "Blether status",
@@ -86,6 +101,31 @@ export function createSetupProblemServer(problem: string): McpServer {
     },
     () => text(explanation),
   );
+  if (takeOver) {
+    const takeOverTool = server.registerTool(
+      "take_over_agent",
+      {
+        title: "Take over agent",
+        description:
+          "Another session is acting as this agent. If your developer wants this session to be the agent instead " +
+          "(for example because the other one crashed or is on a device they've left), take it over: the other session " +
+          "is disconnected, and Blether's tools appear here. Ask your developer first if you're not sure.",
+      },
+      async () => {
+        try {
+          const result = await takeOver(server);
+          status.remove();
+          takeOverTool.remove();
+          return text(result);
+        } catch (error) {
+          return {
+            ...text(`Couldn't take over: ${(error as Error).message}`),
+            isError: true,
+          };
+        }
+      },
+    );
+  }
   return server;
 }
 
@@ -100,6 +140,8 @@ export interface BridgeOptions {
   scanSecrets?: SecretScanner;
   /** Where this agent's sent messages are kept, for replies' context. */
   sentLog?: SentLog;
+  /** Install the tools on this existing server instead of creating one. */
+  server?: McpServer;
 }
 
 /** Creates the MCP server an agent session talks to, backed by a relay connection. */
@@ -111,28 +153,31 @@ export function createBridgeServer(
     now = () => new Date(),
     scanSecrets = scanForSecrets,
     sentLog,
+    server: existing,
   }: BridgeOptions = {},
 ): McpServer {
   const pendingAtStart = escalations?.pending().length ?? 0;
-  const server = new McpServer(
-    { name: "blether", version: "0.0.0" },
-    {
-      instructions: [
-        INSTRUCTIONS,
-        ...(escalations
-          ? [
-              "escalate sets a message aside until your developer decides; list_escalations and record_answer handle what's waiting.",
-            ]
-          : []),
-        ...(pendingAtStart > 0
-          ? [
-              `${pendingAtStart} escalation(s) from earlier sessions are waiting for your developer: call list_escalations and raise them when your developer next speaks to you.`,
-            ]
-          : []),
-      ].join(" "),
-      capabilities: { experimental: { [CLAUDE_CHANNEL]: {} } },
-    },
-  );
+  const server =
+    existing ??
+    new McpServer(
+      { name: "blether", version: "0.0.0" },
+      {
+        instructions: [
+          INSTRUCTIONS,
+          ...(escalations
+            ? [
+                "escalate sets a message aside until your developer decides; list_escalations and record_answer handle what's waiting.",
+              ]
+            : []),
+          ...(pendingAtStart > 0
+            ? [
+                `${pendingAtStart} escalation(s) from earlier sessions are waiting for your developer: call list_escalations and raise them when your developer next speaks to you.`,
+              ]
+            : []),
+        ].join(" "),
+        capabilities: { experimental: { [CLAUDE_CHANNEL]: {} } },
+      },
+    );
   ringDoorbell(server, relay);
 
   const limiter = new SendLimiter(
@@ -438,14 +483,15 @@ function ringDoorbell(server: McpServer, relay: RelayConnection) {
   };
 
   relay.onArrival((item) => ring(item.kind === "lost" ? undefined : item.from));
-  server.server.oninitialized = () => {
-    // The backlog, delivered as the bridge connected, may still be being
-    // decrypted: wait for it, then announce it once.
+  // The backlog, delivered as the bridge connected, may still be being
+  // decrypted: wait for it, then announce it once.
+  const announceBacklog = () =>
     void relay.settled().then(() => {
       initialized = true;
       ring();
     });
-  };
+  if (server.isConnected()) announceBacklog();
+  else server.server.oninitialized = announceBacklog;
 }
 
 /** The form the developer is shown: one yes/no question. */

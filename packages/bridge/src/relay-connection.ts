@@ -65,6 +65,8 @@ export interface ConnectOptions {
   witness?: LogWitness;
   /** Remembers which messages this agent has read, so a relay replaying one is caught. */
   readMessages?: ReadMessageLog;
+  /** If another session is acting as the agent, disconnect it and take its place. */
+  takeover?: boolean;
 }
 
 /** Who a message is for: one agent, every agent holding a role, or every other agent in the team. */
@@ -171,6 +173,8 @@ export class RelayConnection {
   private readonly readThisSession = new Map<string, ReceivedMessage>();
   /** Lost-message notices already put in the mailbox this session. */
   private readonly seenLost = new Set<string>();
+  /** Why the relay closed this connection, once it has. */
+  private closedBecause: string | undefined;
   /** Deliveries are decrypted and verified one at a time, in order. */
   private inbox: Promise<void> = Promise.resolve();
   /** The team log as last verified, refreshed when it's missing something or stale. */
@@ -199,8 +203,14 @@ export class RelayConnection {
     private readonly readMessages: ReadMessageLog | undefined,
   ) {
     socket.on("message", (data) => this.receive(data.toString()));
-    socket.on("close", () => {
-      const error = new RelayError("disconnected", "Lost connection to relay.");
+    socket.on("close", (code, reason) => {
+      this.closedBecause =
+        code === 4002
+          ? "Another session took over this agent, so this one has been disconnected."
+          : code === 4000 || code === 4001
+            ? `The relay disconnected this session: ${reason.toString()}`
+            : "Lost connection to relay.";
+      const error = new RelayError("disconnected", this.closedBecause);
       this.challenge?.reject(error);
       this.welcome?.reject(error);
       for (const pending of [
@@ -232,7 +242,7 @@ export class RelayConnection {
   static async connect(
     url: string,
     credentials: Credentials,
-    { scope, witness, readMessages }: ConnectOptions = {},
+    { scope, witness, readMessages, takeover }: ConnectOptions = {},
   ): Promise<RelayConnection> {
     const socket = new WebSocket(url);
     // Attach the frame handler at once: the relay sends its challenge as soon
@@ -263,6 +273,7 @@ export class RelayConnection {
       connection.write({
         type: "hello",
         ...(scope ?? {}),
+        ...(takeover ? { takeover: true } : {}),
         identity: credentials.identity,
         device: credentials.device.publicKey,
         signature: signChallenge(credentials.device, challenge, scope ?? {}),
@@ -711,7 +722,12 @@ export class RelayConnection {
   ): Promise<T> {
     return new Promise((resolve, reject) => {
       if (this.socket.readyState !== WebSocket.OPEN) {
-        reject(new RelayError("disconnected", "Not connected to relay."));
+        reject(
+          new RelayError(
+            "disconnected",
+            this.closedBecause ?? "Not connected to relay.",
+          ),
+        );
         return;
       }
       pending.set(key, { resolve, reject });

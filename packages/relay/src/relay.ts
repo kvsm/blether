@@ -28,6 +28,12 @@ export interface RelayOptions {
   databasePath?: string;
   /** Clock used to enforce invite expiry. */
   now?: () => Date;
+  /**
+   * How often to check each connection is still alive. A connection that
+   * misses two checks in a row is dropped, which frees its agent for another
+   * session. Defaults to 15 seconds.
+   */
+  heartbeatMs?: number;
 }
 
 export interface Relay {
@@ -245,12 +251,18 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             );
             return;
           }
-          if (sessions.has(sessionKey(requested))) {
+          const existing = sessions.get(sessionKey(requested));
+          if (existing && !frame.takeover) {
             refuse(
               "agent-in-use",
               `Another session is already acting as ${requested.agent}.`,
             );
             return;
+          }
+          if (existing) {
+            // The owner asked to take over: the old session gives way.
+            sessions.delete(sessionKey(requested));
+            existing.close(4002, "Another session took over this agent.");
           }
           scope = requested;
           sessions.set(sessionKey(scope), socket);
@@ -490,6 +502,24 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     });
   });
 
+  // Drop connections that have silently died (a sleeping laptop, a killed
+  // process), so their agents are freed rather than held for ever.
+  const alive = new WeakSet<WebSocket>();
+  wss.on("connection", (socket) => {
+    alive.add(socket);
+    socket.on("pong", () => alive.add(socket));
+  });
+  const heartbeat = setInterval(() => {
+    for (const socket of wss.clients) {
+      if (!alive.has(socket)) {
+        socket.terminate();
+        continue;
+      }
+      alive.delete(socket);
+      socket.ping();
+    }
+  }, options.heartbeatMs ?? 15_000);
+
   const { address, port } = wss.address() as AddressInfo;
   const host = address.includes(":") ? `[${address}]` : address;
 
@@ -497,6 +527,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     url: `ws://${host}:${port}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
+        clearInterval(heartbeat);
         for (const client of wss.clients) client.terminate();
         wss.close((err) => {
           store.close();

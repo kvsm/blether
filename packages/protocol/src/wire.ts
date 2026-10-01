@@ -62,6 +62,11 @@ export const ClientFrame = z.discriminatedUnion("type", [
     type: z.literal("hello"),
     team: z.string().optional(),
     agent: AgentName.optional(),
+    /**
+     * If another session is already acting as the agent, disconnect it and
+     * take its place. Only ever honoured for the agent's owner.
+     */
+    takeover: z.boolean().optional(),
     identity: IdentityLog,
     device: PublicKey,
     signature: Signature,
