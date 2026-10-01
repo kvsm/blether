@@ -8,6 +8,7 @@ import {
   registerEscalationTools,
 } from "./escalation-tools.js";
 import type { EscalationStore } from "./escalations.js";
+import { DEFAULT_SEND_LIMITS, SendLimiter } from "./rate-limit.js";
 import {
   scanForSecrets,
   type SecretFinding,
@@ -109,13 +110,18 @@ export function createBridgeServer(
   );
   ringDoorbell(server, relay);
 
+  const limiter = new SendLimiter(
+    relay.agent,
+    policy.limits ?? DEFAULT_SEND_LIMITS,
+    now,
+  );
   const reminder = escalations ? createReminder(escalations, now) : () => "";
   const respond = (value: string, isError = false) => ({
     content: [{ type: "text" as const, text: value + reminder() }],
     ...(isError ? { isError: true } : {}),
   });
   if (escalations) {
-    registerEscalationTools(server, relay, escalations, now, respond);
+    registerEscalationTools(server, relay, escalations, now, respond, limiter);
   }
 
   server.registerTool(
@@ -130,19 +136,23 @@ export function createBridgeServer(
     },
     async ({ to, body }) => {
       try {
-        const findings = await scanSecrets(body);
+        const warnings = [
+          ...secretWarning(await scanSecrets(body)),
+          ...limitWarning(limiter.check(to)),
+        ];
         const approval = await askToSend(
           server,
           relay,
           policy,
           to,
           body,
-          findings,
+          warnings,
         );
         if (approval !== "approved") {
           return respond(`Not sent: ${approval}`, true);
         }
         const { id, status } = await relay.send(to, body);
+        limiter.record(to);
         return respond(
           status === "delivered"
             ? `Sent message ${id} to ${to}.`
@@ -309,11 +319,19 @@ const ApprovalAnswer = {
   required: ["send"],
 };
 
+/** Something about a message that means the developer must decide, whatever the policy says. */
+interface SendWarning {
+  /** Shown to the developer in the approval prompt. */
+  prompt: string;
+  /** Told to the agent when the host can't ask the developer. */
+  refusal: string;
+}
+
 /**
  * Decides whether a message may be sent: asks the developer through the host
- * (MCP elicitation) when it looks like it contains a secret, whatever the
- * policy says, or when the outgoing Approval Policy says to. Resolves to
- * "approved", or to why it wasn't sent.
+ * (MCP elicitation) when there's a warning (a possible secret, or a sending
+ * limit reached), whatever the policy says, or when the outgoing Approval
+ * Policy says to. Resolves to "approved", or to why it wasn't sent.
  */
 async function askToSend(
   server: McpServer,
@@ -321,38 +339,56 @@ async function askToSend(
   policy: ApprovalPolicy,
   to: string,
   body: string,
-  findings: SecretFinding[],
+  warnings: SendWarning[],
 ): Promise<"approved" | string> {
-  const secrets = findings.length > 0;
-  if (!secrets) {
+  if (warnings.length === 0) {
     if (policy.outgoing === "free") return "approved";
     if (policy.outgoing === "ask-others") {
       const owner = await relay.ownerOf(to);
       if (owner !== undefined && owner === relay.developer) return "approved";
     }
   }
-  const found = findings
-    .map((f) => `- line ${f.line}: ${f.message}`)
-    .join("\n");
   if (!server.server.getClientCapabilities()?.elicitation) {
-    return secrets
-      ? `it looks like it contains a secret, and only your developer can decide to send that, but this host can't ask them:\n${found}\n` +
-          "Remove the secret and send it again, or ask your developer to share it some other way."
+    return warnings.length > 0
+      ? warnings.map((w) => w.refusal).join(" ")
       : "your developer's Approval Policy requires them to approve each message, but this host can't ask them. " +
           "They can change it with `blether policy set --outgoing` if they rely on the host's own permission prompts instead.";
   }
   const preview = body.length > 1500 ? `${body.slice(0, 1500)}…` : body;
-  const warning = secrets
-    ? `⚠ This looks like it contains a secret:\n${found}\n\n`
-    : "";
+  const header = warnings.map((w) => `⚠ ${w.prompt}\n\n`).join("");
   const answer = await server.server.elicitInput({
-    message: `${warning}Your agent ${relay.agent} wants to send this to ${to}:\n\n${preview}`,
+    message: `${header}Your agent ${relay.agent} wants to send this to ${to}:\n\n${preview}`,
     requestedSchema: ApprovalAnswer,
   });
   if (answer.action === "accept" && answer.content?.send === true) {
     return "approved";
   }
   return "your developer didn't approve it.";
+}
+
+function secretWarning(findings: SecretFinding[]): SendWarning[] {
+  if (findings.length === 0) return [];
+  const found = findings
+    .map((f) => `- line ${f.line}: ${f.message}`)
+    .join("\n");
+  return [
+    {
+      prompt: `This looks like it contains a secret:\n${found}`,
+      refusal:
+        `it looks like it contains a secret, and only your developer can decide to send that, but this host can't ask them:\n${found}\n` +
+        "Remove the secret and send it again, or ask your developer to share it some other way.",
+    },
+  ];
+}
+
+function limitWarning(reason: string | undefined): SendWarning[] {
+  if (!reason) return [];
+  return [
+    {
+      prompt: reason,
+      refusal: `it's over a sending limit: ${reason} Stop messaging for now and tell your developer; only they can let more through.`,
+    },
+  ];
 }
 
 function formatSent(message: SentMessage): string {

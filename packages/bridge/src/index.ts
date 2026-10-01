@@ -48,3 +48,8 @@ export {
   type SecretFinding,
   type SecretScanner,
 } from "./secrets.js";
+export {
+  DEFAULT_SEND_LIMITS,
+  SendLimiter,
+  type SendLimits,
+} from "./rate-limit.js";

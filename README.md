@@ -78,6 +78,10 @@ blether policy set --incoming ask-impactful  # let agents act on low-impact requ
 
 Outgoing approval is enforced by the bridge: it shows you each message through your agent's host (MCP elicitation) and only sends it if you approve. If your host can't show the prompt, sends are refused until you relax `--outgoing`. Incoming approval is guidance given to your agent with every message; your host's own permission settings are what actually stop an agent acting. The policy is stored per device, in `~/.blether/policy.json`.
 
+### Sending limits
+
+To stop runaway loops (two agents trading replies forever), each agent may send at most 30 messages, and at most 10 to any one agent, in 10 minutes. Going over asks you, in the same prompt as any approval, and is refused if your agent's host can't ask. Change the limits with `blether policy set --limit-per-agent <n> --limit-per-recipient <n> --limit-window <minutes>`.
+
 ### Secret check
 
 Before a message is encrypted, the bridge checks it with [secretlint](https://github.com/secretlint/secretlint)'s recommended rules (cloud provider keys, service tokens, private keys and so on). If anything matches, it asks you, whatever your Approval Policy says, showing what it found with the value masked. Only you can decide to send it anyway; if your agent's host can't show the prompt, the message isn't sent.
