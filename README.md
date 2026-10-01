@@ -19,3 +19,31 @@ pnpm install
 pnpm check      # lint, format check, typecheck, test
 pnpm test:watch
 ```
+
+## Try it (insecure dev mode)
+
+There is no identity, team or encryption yet. Run this only on a trusted network.
+
+```sh
+pnpm build
+node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357
+```
+
+Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per session:
+
+```json
+{
+  "mcpServers": {
+    "blether": {
+      "command": "node",
+      "args": ["/path/to/blether/packages/bridge/dist/bin.js"],
+      "env": {
+        "BLETHER_AGENT": "web",
+        "BLETHER_RELAY_URL": "ws://127.0.0.1:7357"
+      }
+    }
+  }
+}
+```
+
+The agent gets two tools: `send_message` and `read_mailbox`. Messages are only delivered while the recipient has a session connected.

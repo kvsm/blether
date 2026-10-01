@@ -1,4 +1,2 @@
-import { ENVELOPE_VERSION } from "@blether/protocol";
-
-/** Envelope version this bridge speaks. */
-export const bridgeEnvelopeVersion = ENVELOPE_VERSION;
+export { RelayConnection, RelayError } from "./relay-connection.js";
+export { createBridgeServer } from "./server.js";
