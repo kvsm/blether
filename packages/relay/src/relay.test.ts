@@ -6,6 +6,7 @@ import {
   RelayFrame,
   acceptInvite,
   addDevice,
+  createAgent,
   createIdentity,
   createInvite,
   createTeam,
@@ -188,8 +189,19 @@ function useRelay(options: RelayOptions = {}) {
     await append(acceptInvite(ctx.team, invite, secret, as.signer), as);
   };
 
-  /** Connects a session as `agent` in the team, retrying while a just-closed session still holds it. */
+  /** Creates `agent`, owned by `as`, unless the team already has it. */
+  const ensureAgent = async (agent: string, as: Developer) => {
+    if (ctx.team.agents.some((a) => a.name === agent)) return;
+    await append(createAgent(ctx.team, agent, [], as.signer), as);
+  };
+
+  /**
+   * Connects a session as `agent` in the team, creating the agent for `as` if
+   * the team doesn't have it yet, and retrying while a just-closed session
+   * still holds it.
+   */
   const connectAs = async (agent: string, as: Developer = alice) => {
+    await ensureAgent(agent, as);
     for (let attempt = 0; ; attempt++) {
       const client = await connect();
       const reply = await client.sayHello({ team: ctx.team.id, agent }, as);
@@ -224,15 +236,17 @@ function useRelay(options: RelayOptions = {}) {
     await ctx.relay.close();
   });
 
-  return { ctx, connect, cli, append, connectAs, introduce };
+  return { ctx, connect, cli, append, ensureAgent, connectAs, introduce };
 }
 
 describe("relay", () => {
-  const { ctx, connect, cli, append, connectAs, introduce } = useRelay();
+  const { ctx, connect, cli, append, ensureAgent, connectAs, introduce } =
+    useRelay();
   const inTeam = (agent: string) => ({ team: ctx.team.id, agent });
 
   describe("authentication", () => {
     it("welcomes an agent session that signs the challenge with its developer's device", async () => {
+      await ensureAgent("web", alice);
       const web = await connect();
 
       expect(await web.hello(inTeam("web"))).toEqual({
@@ -559,8 +573,17 @@ describe("relay", () => {
 
     it("never delivers across teams, even to an agent with the same name", async () => {
       const otherLog = createTeam("frontend", alice.signer);
+      otherLog.push(createAgent(verify(otherLog), "api", [], alice.signer));
       const admin = await cli(alice);
-      await admin.teamRequest({ type: "create-team", log: otherLog });
+      await admin.teamRequest({
+        type: "create-team",
+        log: otherLog.slice(0, 1),
+      });
+      await admin.teamRequest({
+        type: "append-team",
+        team: verify(otherLog).id,
+        entry: otherLog[1],
+      });
       const apiElsewhere = await connect();
       await apiElsewhere.hello({ team: verify(otherLog).id, agent: "api" });
       const web = await connectAs("web");
@@ -675,8 +698,55 @@ describe("relay", () => {
   });
 });
 
+describe("relay agents and presence", () => {
+  const { ctx, connect, cli, ensureAgent, connectAs } = useRelay();
+
+  it("refuses a session for an agent nobody has created", async () => {
+    const session = await connect();
+
+    expect(
+      await session.sayHello({ team: ctx.team.id, agent: "ghost" }),
+    ).toMatchObject({ code: "unknown-agent" });
+  });
+
+  it("reports which agents have a session connected", async () => {
+    await ensureAgent("web", alice);
+    await ensureAgent("api", bob);
+    const web = await connectAs("web");
+    const member = await cli(bob);
+
+    const ask = async () => {
+      member.send({
+        type: "get-presence",
+        requestId: randomUUID(),
+        team: ctx.team.id,
+      });
+      return (await member.next("presence")).online;
+    };
+    expect(await ask()).toEqual(["web"]);
+
+    const api = await connectAs("api", bob);
+    expect(await ask()).toEqual(["api", "web"]);
+
+    await web.close();
+    await api.close();
+    await expect.poll(ask).toEqual([]);
+  });
+
+  it("only tells members about presence", async () => {
+    const outsider = await cli(carol);
+    const requestId = randomUUID();
+    outsider.send({ type: "get-presence", requestId, team: ctx.team.id });
+
+    expect(await outsider.next("error")).toMatchObject({
+      id: requestId,
+      code: "not-a-member",
+    });
+  });
+});
+
 describe("relay identity updates", () => {
-  const { ctx, connect } = useRelay();
+  const { ctx, connect, ensureAgent } = useRelay();
   const inTeam = (agent: string) => ({ team: ctx.team.id, agent });
 
   /** Alice's identity with one more device, as that device's credentials. */
@@ -691,6 +761,7 @@ describe("relay identity updates", () => {
   }
 
   it("lets a newly added device act as its developer's agents", async () => {
+    await ensureAgent("web", alice);
     const laptop = withNewDevice();
     const session = await connect();
 
@@ -763,11 +834,16 @@ describe("relay persistence", () => {
     const databasePath = join(dir, "relay.db");
     const log = createTeam("backend", alice.signer);
     const team = verify(log).id;
+    log.push(createAgent(verify(log), "api", [], alice.signer));
+    log.push(createAgent(verify(log), "web", [], alice.signer));
 
     const before = await startRelay({ databasePath });
     const admin = await TestClient.connect(before.url);
     await admin.hello({});
-    await admin.teamRequest({ type: "create-team", log });
+    await admin.teamRequest({ type: "create-team", log: log.slice(0, 1) });
+    for (const entry of log.slice(1)) {
+      await admin.teamRequest({ type: "append-team", team, entry });
+    }
     await admin.close();
     const api = await TestClient.connect(before.url);
     await api.hello({ team, agent: "api" });

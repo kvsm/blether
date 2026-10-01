@@ -52,8 +52,8 @@ const sessionKey = ({ team, agent }: AgentScope) => `${team}\n${agent}`;
  * auth.ts). A bridge session names a team and an agent; the relay only
  * accepts it from a member of the team, and its messages never leave the
  * team. A CLI session names neither, and can only read and extend team logs.
- * There is no encryption yet. Until agents are created deliberately (#8), the
- * first developer to act as an agent name in a team owns it.
+ * A session can only act as an agent its developer created in the team log.
+ * There is no encryption yet.
  */
 export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const store = new MailboxStore(options.databasePath ?? ":memory:");
@@ -180,12 +180,20 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             refuse("unknown-team", "This relay has no such team.");
             return;
           }
-          if (!verifyTeam(log).members.includes(identity.id)) {
+          const team = verifyTeam(log);
+          if (!team.members.includes(identity.id)) {
             refuse("not-a-member", "You aren't a member of this team.");
             return;
           }
-          const owner = store.agentOwner(requested.team, requested.agent);
-          if (owner && owner !== identity.id) {
+          const agent = team.agents.find((a) => a.name === requested.agent);
+          if (!agent) {
+            refuse(
+              "unknown-agent",
+              `The team has no agent called ${requested.agent}. Create it with \`blether agent create ${team.name} ${requested.agent}\`.`,
+            );
+            return;
+          }
+          if (agent.owner !== identity.id) {
             refuse(
               "agent-owned-by-another",
               `${requested.agent} belongs to another developer.`,
@@ -199,7 +207,6 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             );
             return;
           }
-          store.claimAgent(requested.team, requested.agent, identity.id);
           scope = requested;
           sessions.set(sessionKey(scope), socket);
         }
@@ -338,6 +345,28 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           send(teamReply(frame.requestId, log));
           return;
         }
+
+        case "get-presence": {
+          const log = store.teamLog(frame.team);
+          if (!log || !verifyTeam(log).members.includes(developer.id)) {
+            fail(
+              "not-a-member",
+              "You aren't a member of this team.",
+              frame.requestId,
+            );
+            return;
+          }
+          const prefix = sessionKey({ team: frame.team, agent: "" });
+          send({
+            type: "presence",
+            requestId: frame.requestId,
+            online: [...sessions.keys()]
+              .filter((key) => key.startsWith(prefix))
+              .map((key) => key.slice(prefix.length))
+              .sort(),
+          });
+          return;
+        }
       }
 
       if (!scope) {
@@ -351,7 +380,8 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
 
       switch (frame.type) {
         case "send": {
-          if (!store.agentOwner(scope.team, frame.to)) {
+          const team = verifyTeam(store.teamLog(scope.team)!);
+          if (!team.agents.some((a) => a.name === frame.to)) {
             fail(
               "unknown-agent",
               `There is no agent called ${frame.to} in this team.`,

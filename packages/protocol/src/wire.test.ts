@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { AgentName, ClientFrame, RelayFrame, parseFrame } from "./wire.js";
+import { AgentName } from "./names.js";
+import { ClientFrame, RelayFrame, parseFrame } from "./wire.js";
 
 const id = "3f1c2a5e-8d4b-4c6f-9a1e-2b7d5c8e9f01";
 

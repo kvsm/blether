@@ -7,6 +7,7 @@ import {
 } from "@blether/bridge";
 import {
   createIdentity,
+  createAgent,
   createTeam,
   generateDeviceKey,
   verifyIdentityLog,
@@ -34,9 +35,15 @@ let team: string;
 async function createTestTeam(relay: Relay) {
   const cli = await RelayConnection.connect(relay.url, credentials);
   const signer = { device, identity: verifyIdentityLog(credentials.identity) };
-  const created = await cli.createTeam(createTeam("backend", signer));
+  let { team } = await cli.createTeam(createTeam("backend", signer));
+  for (const agent of ["web", "api", "ops"]) {
+    ({ team } = await cli.appendTeam(
+      team.id,
+      createAgent(team, agent, [], signer),
+    ));
+  }
   await cli.close();
-  return created.team.id;
+  return team.id;
 }
 
 /**
@@ -189,6 +196,7 @@ describe("messaging between agents through bridges and a relay", () => {
     const { tools } = await web.client.listTools();
 
     expect(tools.map((t) => t.name).sort()).toEqual([
+      "list_agents",
       "read_mailbox",
       "send_message",
       "sent_messages",

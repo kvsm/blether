@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { PublicKey, Signature } from "./crypto.js";
 import { IdentityLog } from "./identity.js";
+import { AgentName } from "./names.js";
 import { SignedTeamEntry, TeamLog } from "./team.js";
 
 /**
@@ -20,15 +21,6 @@ import { SignedTeamEntry, TeamLog } from "./team.js";
  * it says hello, so a bridge may see the same message again after
  * reconnecting and should ignore ids it already holds.
  */
-
-/** An agent's name, unique within its team. */
-export const AgentName = z
-  .string()
-  .regex(
-    /^[a-z0-9][a-z0-9-]{0,62}$/,
-    "lowercase letters, digits and hyphens, starting with a letter or digit",
-  );
-export type AgentName = z.infer<typeof AgentName>;
 
 export const Message = z.object({
   id: z.uuid(),
@@ -95,6 +87,12 @@ export const ClientFrame = z.discriminatedUnion("type", [
     team: z.string(),
     entry: SignedTeamEntry,
   }),
+  /** Asks which of a team's agents have a session connected. Members only. */
+  z.object({
+    type: z.literal("get-presence"),
+    requestId: z.uuid(),
+    team: z.string(),
+  }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 
@@ -155,6 +153,12 @@ export const RelayFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     log: TeamLog,
     identities: z.array(IdentityLog),
+  }),
+  /** Reply to get-presence: the agents a session is currently acting as. */
+  z.object({
+    type: z.literal("presence"),
+    requestId: z.uuid(),
+    online: z.array(AgentName),
   }),
   /** `id` is the id of the send, or the requestId of the request, that failed. */
   z.object({

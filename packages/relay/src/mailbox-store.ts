@@ -10,7 +10,7 @@ import type {
 } from "@blether/protocol";
 
 /** Bumped whenever the schema changes incompatibly. */
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 export class IncompatibleDatabaseError extends Error {
   constructor(path: string, version: number) {
@@ -24,7 +24,7 @@ export class IncompatibleDatabaseError extends Error {
 
 /**
  * Durable storage for the relay: developers' identity logs, teams'
- * membership logs, which developer owns each agent in a team, and agents'
+ * membership logs (which also record each team's agents), and agents'
  * mailboxes. A message's body is kept only until the recipient reads it;
  * after that the relay keeps just enough to report its delivery status to
  * the sender.
@@ -58,12 +58,6 @@ export class MailboxStore {
         id      TEXT PRIMARY KEY,
         log     TEXT NOT NULL,
         entries INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS agents (
-        team  TEXT NOT NULL REFERENCES teams (id),
-        name  TEXT NOT NULL,
-        owner TEXT NOT NULL REFERENCES developers (id),
-        PRIMARY KEY (team, name)
       );
       CREATE TABLE IF NOT EXISTS messages (
         seq       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,29 +133,6 @@ export class MailboxStore {
       )
       .run(JSON.stringify(log), log.length, team, expectedEntries);
     return changes === 1;
-  }
-
-  // Agents
-
-  /** The developer id that owns `agent` in `team`, if any session has acted as it. */
-  agentOwner(team: string, agent: AgentName): string | undefined {
-    const row = this.db
-      .prepare("SELECT owner FROM agents WHERE team = ? AND name = ?")
-      .get(team, agent) as { owner: string } | undefined;
-    return row?.owner;
-  }
-
-  /**
-   * Records that `owner` owns `agent` in `team`, so others can message it.
-   * Until agents are created deliberately (#8), the first developer to act as
-   * a name owns it.
-   */
-  claimAgent(team: string, agent: AgentName, owner: string): void {
-    this.db
-      .prepare(
-        "INSERT OR IGNORE INTO agents (team, name, owner) VALUES (?, ?, ?)",
-      )
-      .run(team, agent, owner);
   }
 
   // Mailboxes

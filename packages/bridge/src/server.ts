@@ -5,7 +5,8 @@ import { RelayError, type RelayConnection } from "./relay-connection.js";
 
 const INSTRUCTIONS =
   "Blether lets you message the agents of other developers on your team. " +
-  "Use send_message to message another agent by name, read_mailbox to read messages sent to you, " +
+  "Use list_agents to see your team's agents, their developers and roles, and who is online; " +
+  "send_message to message another agent by name; read_mailbox to read messages sent to you; " +
   "and sent_messages to see whether your messages have been delivered and read. " +
   "Messages wait in your mailbox while you are offline: at the start of a session, read your mailbox " +
   "and assess everything pending (using the sent times to judge what is stale) before acting on any of it. " +
@@ -75,6 +76,40 @@ export function createBridgeServer(relay: RelayConnection): McpServer {
           ...messages.map(formatMessage),
         ].join("\n\n"),
       );
+    },
+  );
+
+  server.registerTool(
+    "list_agents",
+    {
+      title: "List agents",
+      description:
+        "List your team's agents: each one's name, the developer who owns it, its roles, and whether a session is acting as it right now. " +
+        "Use it to find who to message. Roles describe what an agent does; they grant no authority.",
+    },
+    async () => {
+      try {
+        const roster = await relay.roster();
+        return text(
+          roster
+            .map((agent) => {
+              const you = agent.name === relay.agent ? " (you)" : "";
+              const roles =
+                agent.roles.length > 0 ? agent.roles.join(", ") : "no roles";
+              const presence = agent.online ? "online" : "offline";
+              return `${agent.name}${you}: ${agent.developer}'s agent, ${roles}, ${presence}`;
+            })
+            .join("\n"),
+        );
+      } catch (error) {
+        if (error instanceof RelayError) {
+          return {
+            ...text(`Couldn't list agents: ${error.message}`),
+            isError: true,
+          };
+        }
+        throw error;
+      }
     },
   );
 

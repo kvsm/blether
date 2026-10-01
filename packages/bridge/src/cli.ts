@@ -1,14 +1,18 @@
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
+  AgentName,
   DEFAULT_INVITE_TTL_HOURS,
   DeveloperName,
   DeviceLabel,
   InviteLinkError,
   PairingError,
+  RoleName,
   TeamName,
   acceptInvite,
   addDevice,
+  addRole,
+  createAgent,
   deviceFingerprint,
   formatDeviceGrant,
   formatDeviceRequest,
@@ -22,6 +26,7 @@ import {
   isInviteOpen,
   parseInviteLink,
   revokeInvite,
+  setAgentRoles,
   verifyIdentityLog,
   type Signer,
 } from "@blether/protocol";
@@ -55,6 +60,12 @@ Commands:
   device add <request> [--label <l>] On an existing device: approve a new device
   device accept <grant>              On the new device: finish adding it
   device list                        List your identity's devices
+  role add <team> <role>             Add a role to the team's agreed list
+  agent create <team> <name> [--role <r>]...
+                                     Create an agent you own, with roles from the team's list
+  agent roles <team> <name> [--role <r>]...
+                                     Replace the roles of one of your agents
+  agent list <team>                  Show the team's agents and who is online
 
 Set BLETHER_HOME to keep Blether's files somewhere other than ~/.blether.`;
 
@@ -124,6 +135,22 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       if (sub === "members") return teamMembers(args, ctx);
       throw new CliError(
         `Unknown team command: ${sub ?? "(none)"}\n\n${USAGE}`,
+      );
+    }
+    case "role": {
+      const [sub, ...args] = rest;
+      if (sub === "add") return roleAdd(args, ctx);
+      throw new CliError(
+        `Unknown role command: ${sub ?? "(none)"}\n\n${USAGE}`,
+      );
+    }
+    case "agent": {
+      const [sub, ...args] = rest;
+      if (sub === "create") return agentCreate(args, ctx);
+      if (sub === "roles") return agentRoles(args, ctx);
+      if (sub === "list") return agentList(args, ctx);
+      throw new CliError(
+        `Unknown agent command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
     }
     case "device": {
@@ -463,6 +490,158 @@ async function invite(args: string[], ctx: CliContext): Promise<number> {
     `To cancel it: blether revoke-invite ${record.name} ${created.invite}`,
   );
   return 0;
+}
+
+async function roleAdd(args: string[], ctx: CliContext): Promise<number> {
+  const record = loadTeam(ctx.teams, args[0]);
+  const role = parseName(
+    RoleName,
+    args[1],
+    "Usage: blether role add <team> <role>",
+  );
+  const credentials = loadCredentials(ctx.store);
+
+  await withRelay(ctx, record.relayUrl, credentials, async (relay) => {
+    const { team } = await relay.getTeam(record.id);
+    if (team.roles.includes(role)) {
+      throw new CliError(`${record.name} already has a ${role} role.`);
+    }
+    await relay.appendTeam(
+      record.id,
+      addRole(team, role, toSigner(credentials), now(ctx)),
+    );
+  });
+  ctx.io.out(`Added the ${role} role to ${record.name}.`);
+  return 0;
+}
+
+async function agentCreate(args: string[], ctx: CliContext): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { role: { type: "string", multiple: true } },
+  });
+  const record = loadTeam(ctx.teams, positionals[0]);
+  const name = parseName(
+    AgentName,
+    positionals[1],
+    "Usage: blether agent create <team> <name> [--role <role>]...",
+  );
+  const roles = values.role ?? [];
+  const credentials = loadCredentials(ctx.store);
+
+  await withRelay(ctx, record.relayUrl, credentials, async (relay) => {
+    const { team } = await relay.getTeam(record.id);
+    if (team.agents.some((a) => a.name === name)) {
+      throw new CliError(`${record.name} already has an agent called ${name}.`);
+    }
+    checkRolesExist(team.roles, roles, record.name);
+    await relay.appendTeam(
+      record.id,
+      createAgent(team, name, roles, toSigner(credentials), now(ctx)),
+    );
+  });
+  ctx.io.out(`Created agent ${name} in ${record.name}.`);
+  ctx.io.out(
+    `Point a bridge at it with BLETHER_TEAM=${record.name} BLETHER_AGENT=${name}.`,
+  );
+  return 0;
+}
+
+async function agentRoles(args: string[], ctx: CliContext): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { role: { type: "string", multiple: true } },
+  });
+  const record = loadTeam(ctx.teams, positionals[0]);
+  const name = parseName(
+    AgentName,
+    positionals[1],
+    "Usage: blether agent roles <team> <name> [--role <role>]...",
+  );
+  const roles = values.role ?? [];
+  const credentials = loadCredentials(ctx.store);
+  const me = verifyIdentityLog(credentials.identity).id;
+
+  await withRelay(ctx, record.relayUrl, credentials, async (relay) => {
+    const { team } = await relay.getTeam(record.id);
+    const agent = team.agents.find((a) => a.name === name);
+    if (!agent)
+      throw new CliError(`${record.name} has no agent called ${name}.`);
+    if (agent.owner !== me) {
+      throw new CliError(`${name} belongs to another developer.`);
+    }
+    checkRolesExist(team.roles, roles, record.name);
+    await relay.appendTeam(
+      record.id,
+      setAgentRoles(team, name, roles, toSigner(credentials), now(ctx)),
+    );
+  });
+  ctx.io.out(
+    roles.length > 0
+      ? `${name}'s roles are now: ${roles.join(", ")}.`
+      : `${name} now has no roles.`,
+  );
+  return 0;
+}
+
+async function agentList(args: string[], ctx: CliContext): Promise<number> {
+  const record = loadTeam(ctx.teams, args[0]);
+  const credentials = loadCredentials(ctx.store);
+  const { team, identities, online } = await withRelay(
+    ctx,
+    record.relayUrl,
+    credentials,
+    async (relay) => ({
+      ...(await relay.getTeam(record.id)),
+      online: await relay.getPresence(record.id),
+    }),
+  );
+  if (team.agents.length === 0) {
+    ctx.io.out(
+      `${record.name} has no agents yet. Create one with: blether agent create ${record.name} <name>`,
+    );
+    return 0;
+  }
+  ctx.io.out(`Agents in ${record.name}:`);
+  for (const agent of team.agents) {
+    const owner = identities.get(agent.owner)?.name ?? "(unknown)";
+    const roles = agent.roles.length > 0 ? agent.roles.join(", ") : "no roles";
+    const presence = online.includes(agent.name) ? "online" : "offline";
+    ctx.io.out(`  ${agent.name}  ${owner}, ${roles}, ${presence}`);
+  }
+  if (team.roles.length > 0) {
+    ctx.io.out(`Roles: ${team.roles.join(", ")}`);
+  }
+  return 0;
+}
+
+function checkRolesExist(known: string[], roles: string[], team: string) {
+  const unknown = roles.find((r) => !known.includes(r));
+  if (unknown) {
+    throw new CliError(
+      `${team} has no ${unknown} role. Add it first with: blether role add ${team} ${unknown}`,
+    );
+  }
+  if (new Set(roles).size !== roles.length) {
+    throw new CliError("A role is listed twice.");
+  }
+}
+
+function parseName(
+  schema: typeof AgentName,
+  value: string | undefined,
+  usage: string,
+): string {
+  if (value === undefined) throw new CliError(usage);
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    throw new CliError(
+      `${value} isn't a valid name: use lowercase letters, digits and hyphens.`,
+    );
+  }
+  return parsed.data;
 }
 
 async function revoke(args: string[], ctx: CliContext): Promise<number> {

@@ -11,6 +11,7 @@ import {
   type DeviceKey,
 } from "./crypto.js";
 import type { Identity } from "./identity.js";
+import { AgentName, RoleName } from "./names.js";
 
 /**
  * A team's membership log (ADR 0006): an append-only chain of signed entries.
@@ -60,6 +61,26 @@ export const TeamEntry = z.discriminatedUnion("type", [
     invite: InviteId,
     createdAt: z.iso.datetime(),
   }),
+  /** Adds a role to the team's agreed list. Any member can. */
+  z.object({
+    type: z.literal("role-added"),
+    role: RoleName,
+    createdAt: z.iso.datetime(),
+  }),
+  /** Creates an agent owned by the entry's author. */
+  z.object({
+    type: z.literal("agent-created"),
+    agent: AgentName,
+    roles: z.array(RoleName),
+    createdAt: z.iso.datetime(),
+  }),
+  /** Replaces an agent's roles. Only its owner can. */
+  z.object({
+    type: z.literal("agent-roles-set"),
+    agent: AgentName,
+    roles: z.array(RoleName),
+    createdAt: z.iso.datetime(),
+  }),
 ]);
 export type TeamEntry = z.infer<typeof TeamEntry>;
 
@@ -96,8 +117,21 @@ export interface Team {
   /** Identity ids of the members, the admin included. */
   members: string[];
   invites: Invite[];
+  /** The team's agreed list of roles. */
+  roles: RoleName[];
+  /** The team's agents, in the order they were created. */
+  agents: TeamAgent[];
   /** Hash of the last entry: what the next entry's `prev` must be. */
   head: string;
+}
+
+/** An agent as the team log records it. Whether a session is acting as it comes from the relay. */
+export interface TeamAgent {
+  name: AgentName;
+  /** Identity id of the developer who created and owns it. */
+  owner: string;
+  roles: RoleName[];
+  createdAt: string;
 }
 
 export class TeamError extends Error {
@@ -184,6 +218,64 @@ export function createInvite(
   return { entry, invite, secret };
 }
 
+/** Adds `role` to the team's agreed list of roles. */
+export function addRole(
+  team: Team,
+  role: RoleName,
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  return signEntry(
+    {
+      type: "role-added",
+      role: RoleName.parse(role),
+      createdAt: now.toISOString(),
+    },
+    team.head,
+    by,
+  );
+}
+
+/** Creates agent `name`, owned by `by`, with roles from the team's list. */
+export function createAgent(
+  team: Team,
+  name: AgentName,
+  roles: RoleName[],
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  return signEntry(
+    {
+      type: "agent-created",
+      agent: AgentName.parse(name),
+      roles,
+      createdAt: now.toISOString(),
+    },
+    team.head,
+    by,
+  );
+}
+
+/** Replaces the roles of agent `name`, which `by` must own. */
+export function setAgentRoles(
+  team: Team,
+  name: AgentName,
+  roles: RoleName[],
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  return signEntry(
+    {
+      type: "agent-roles-set",
+      agent: name,
+      roles,
+      createdAt: now.toISOString(),
+    },
+    team.head,
+    by,
+  );
+}
+
 export function revokeInvite(
   team: Team,
   invite: string,
@@ -265,6 +357,8 @@ export function verifyTeamLog(
         admin: signed.author,
         members: [signed.author],
         invites: [],
+        roles: [],
+        agents: [],
         head: "",
       };
     } else {
@@ -334,6 +428,53 @@ function apply(
       invite.status = "used";
       team.members.push(signed.author);
       return;
+    case "role-added":
+      if (!isMember)
+        throw new TeamError(`${where}: only members can add roles.`);
+      if (team.roles.includes(entry.role)) {
+        throw new TeamError(`${where}: the team already has that role.`);
+      }
+      team.roles.push(entry.role);
+      return;
+    case "agent-created":
+      if (!isMember) {
+        throw new TeamError(`${where}: only members can create agents.`);
+      }
+      if (team.agents.some((a) => a.name === entry.agent)) {
+        throw new TeamError(
+          `${where}: the team already has an agent called ${entry.agent}.`,
+        );
+      }
+      checkRoles(team, entry.roles, where);
+      team.agents.push({
+        name: entry.agent,
+        owner: signed.author,
+        roles: [...entry.roles],
+        createdAt: entry.createdAt,
+      });
+      return;
+    case "agent-roles-set": {
+      const agent = team.agents.find((a) => a.name === entry.agent);
+      if (!agent) throw new TeamError(`${where}: no such agent.`);
+      if (agent.owner !== signed.author) {
+        throw new TeamError(
+          `${where}: only an agent's owner can change its roles.`,
+        );
+      }
+      checkRoles(team, entry.roles, where);
+      agent.roles = [...entry.roles];
+      return;
+    }
+  }
+}
+
+function checkRoles(team: Team, roles: readonly string[], where: string) {
+  if (new Set(roles).size !== roles.length) {
+    throw new TeamError(`${where}: a role is listed twice.`);
+  }
+  const unknown = roles.find((r) => !team.roles.includes(r));
+  if (unknown) {
+    throw new TeamError(`${where}: the team has no role called ${unknown}.`);
   }
 }
 

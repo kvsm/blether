@@ -38,6 +38,14 @@ Send the invite to a teammate privately. They run `blether init` once, then `ble
 
 To use Blether on another of your own devices, don't run `blether init` there. Run `blether device request` on the new device, `blether device add <request>` on one that already has your identity (check the fingerprints match), then `blether device accept <grant>` back on the new device. It gets your identity and your list of teams.
 
+Each session acts as an agent you create first. Roles come from the team's agreed list:
+
+```sh
+blether role add backend frontend
+blether agent create backend web --role frontend
+blether agent list backend             # the roster: agents, owners, roles, who's online
+```
+
 Add the bridge to each agent's MCP config, with the team and a different `BLETHER_AGENT` per session:
 
 ```json
@@ -55,7 +63,7 @@ Add the bridge to each agent's MCP config, with the team and a different `BLETHE
 }
 ```
 
-The agent gets three tools: `send_message`, `read_mailbox` and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team. An agent can be messaged once a session has acted as it at least once, and the first developer to act as an agent name in a team owns it.
+The agent gets four tools: `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
 
 Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from earlier dev builds can't be upgraded; move them aside.
 

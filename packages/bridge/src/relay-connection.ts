@@ -63,6 +63,16 @@ interface Welcome {
   identity: IdentityLog;
 }
 
+/** One agent in a team's roster. */
+export interface RosterEntry {
+  name: AgentName;
+  /** The name of the developer who owns it. */
+  developer: string;
+  roles: string[];
+  /** Whether a session is currently acting as it. */
+  online: boolean;
+}
+
 /** The team and agent a bridge session acts as. */
 export interface AgentScope {
   team: string;
@@ -92,6 +102,7 @@ export class RelayConnection {
   private readonly sends = new Map<string, Pending<SendReceipt>>();
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
   private readonly teamRequests = new Map<string, Pending<TeamReply>>();
+  private readonly presenceRequests = new Map<string, Pending<string[]>>();
   private challenge: Pending<string> | undefined;
   private welcome: Pending<Welcome> | undefined;
   /** The authenticated developer's identity id, once the relay has welcomed this session. */
@@ -118,11 +129,13 @@ export class RelayConnection {
         ...this.sends.values(),
         ...this.listings.values(),
         ...this.teamRequests.values(),
+        ...this.presenceRequests.values(),
       ])
         pending.reject(error);
       this.sends.clear();
       this.listings.clear();
       this.teamRequests.clear();
+      this.presenceRequests.clear();
     });
   }
 
@@ -228,6 +241,31 @@ export class RelayConnection {
       log,
     });
     return this.verifyReply(reply);
+  }
+
+  /** The names of team `id`'s agents that have a session connected. */
+  getPresence(id: string): Promise<string[]> {
+    const requestId = randomUUID();
+    return this.request(this.presenceRequests, requestId, {
+      type: "get-presence",
+      requestId,
+      team: id,
+    });
+  }
+
+  /** The roster of this session's team: every agent, its developer and roles, and whether it's online. */
+  async roster(): Promise<RosterEntry[]> {
+    if (!this.scope) throw new Error("This session isn't acting as an agent.");
+    const [{ team, identities }, online] = await Promise.all([
+      this.getTeam(this.scope.team),
+      this.getPresence(this.scope.team),
+    ]);
+    return team.agents.map((agent) => ({
+      name: agent.name,
+      developer: identities.get(agent.owner)?.name ?? "(unknown)",
+      roles: agent.roles,
+      online: online.includes(agent.name),
+    }));
   }
 
   /** Fetches team `id`'s log and verifies it. */
@@ -360,13 +398,17 @@ export class RelayConnection {
       case "team":
         take(this.teamRequests, frame.requestId)?.resolve(frame);
         return;
+      case "presence":
+        take(this.presenceRequests, frame.requestId)?.resolve(frame.online);
+        return;
       case "error": {
         const error = new RelayError(frame.code, frame.message);
         if (frame.id) {
           (
             take(this.sends, frame.id) ??
             take(this.listings, frame.id) ??
-            take(this.teamRequests, frame.id)
+            take(this.teamRequests, frame.id) ??
+            take(this.presenceRequests, frame.id)
           )?.reject(error);
         } else if (this.welcome) {
           this.welcome.reject(error);
