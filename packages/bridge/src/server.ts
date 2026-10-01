@@ -9,6 +9,11 @@ import {
 } from "./escalation-tools.js";
 import type { EscalationStore } from "./escalations.js";
 import {
+  scanForSecrets,
+  type SecretFinding,
+  type SecretScanner,
+} from "./secrets.js";
+import {
   STRICTEST_POLICY,
   incomingGuidance,
   type ApprovalPolicy,
@@ -72,6 +77,8 @@ export interface BridgeOptions {
   escalations?: EscalationStore;
   /** The clock, for escalation times and reminders. */
   now?: () => Date;
+  /** Checks outgoing messages for secrets. Defaults to secretlint's recommended rules. */
+  scanSecrets?: SecretScanner;
 }
 
 /** Creates the MCP server an agent session talks to, backed by a relay connection. */
@@ -81,6 +88,7 @@ export function createBridgeServer(
     policy = STRICTEST_POLICY,
     escalations,
     now = () => new Date(),
+    scanSecrets = scanForSecrets,
   }: BridgeOptions = {},
 ): McpServer {
   const pendingAtStart = escalations?.pending().length ?? 0;
@@ -122,7 +130,15 @@ export function createBridgeServer(
     },
     async ({ to, body }) => {
       try {
-        const approval = await askToSend(server, relay, policy, to, body);
+        const findings = await scanSecrets(body);
+        const approval = await askToSend(
+          server,
+          relay,
+          policy,
+          to,
+          body,
+          findings,
+        );
         if (approval !== "approved") {
           return respond(`Not sent: ${approval}`, true);
         }
@@ -294,8 +310,9 @@ const ApprovalAnswer = {
 };
 
 /**
- * Applies the outgoing Approval Policy to a message: asks the developer
- * through the host (MCP elicitation) when the policy says to. Resolves to
+ * Decides whether a message may be sent: asks the developer through the host
+ * (MCP elicitation) when it looks like it contains a secret, whatever the
+ * policy says, or when the outgoing Approval Policy says to. Resolves to
  * "approved", or to why it wasn't sent.
  */
 async function askToSend(
@@ -304,21 +321,32 @@ async function askToSend(
   policy: ApprovalPolicy,
   to: string,
   body: string,
+  findings: SecretFinding[],
 ): Promise<"approved" | string> {
-  if (policy.outgoing === "free") return "approved";
-  if (policy.outgoing === "ask-others") {
-    const owner = await relay.ownerOf(to);
-    if (owner !== undefined && owner === relay.developer) return "approved";
+  const secrets = findings.length > 0;
+  if (!secrets) {
+    if (policy.outgoing === "free") return "approved";
+    if (policy.outgoing === "ask-others") {
+      const owner = await relay.ownerOf(to);
+      if (owner !== undefined && owner === relay.developer) return "approved";
+    }
   }
+  const found = findings
+    .map((f) => `- line ${f.line}: ${f.message}`)
+    .join("\n");
   if (!server.server.getClientCapabilities()?.elicitation) {
-    return (
-      "your developer's Approval Policy requires them to approve each message, but this host can't ask them. " +
-      "They can change it with `blether policy set --outgoing` if they rely on the host's own permission prompts instead."
-    );
+    return secrets
+      ? `it looks like it contains a secret, and only your developer can decide to send that, but this host can't ask them:\n${found}\n` +
+          "Remove the secret and send it again, or ask your developer to share it some other way."
+      : "your developer's Approval Policy requires them to approve each message, but this host can't ask them. " +
+          "They can change it with `blether policy set --outgoing` if they rely on the host's own permission prompts instead.";
   }
   const preview = body.length > 1500 ? `${body.slice(0, 1500)}…` : body;
+  const warning = secrets
+    ? `⚠ This looks like it contains a secret:\n${found}\n\n`
+    : "";
   const answer = await server.server.elicitInput({
-    message: `Your agent ${relay.agent} wants to send this to ${to}:\n\n${preview}`,
+    message: `${warning}Your agent ${relay.agent} wants to send this to ${to}:\n\n${preview}`,
     requestedSchema: ApprovalAnswer,
   });
   if (answer.action === "accept" && answer.content?.send === true) {

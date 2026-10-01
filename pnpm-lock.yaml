@@ -56,6 +56,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.31.0
         version: 1.31.0(zod@4.6.5)
+      '@secretlint/core':
+        specifier: ^13.0.6
+        version: 13.0.6
+      '@secretlint/secretlint-rule-preset-recommend':
+        specifier: ^13.0.6
+        version: 13.0.6
       ws:
         specifier: ^8.22.0
         version: 8.22.0
@@ -292,6 +298,21 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
+  '@secretlint/core@13.0.6':
+    resolution: {integrity: sha512-sZ4fKF3/eHO706p8wovzQlaRMfS4k272jAF9LCj/B4HqxhuFiZi/Nx4amWQAYFOcEfrmVpGQmlgHDHDNx+22fw==}
+    engines: {node: '>=22.0.0'}
+
+  '@secretlint/profiler@13.0.6':
+    resolution: {integrity: sha512-I8ci8bwwtJfzUsLTgrf2j8aOBeb9myKgzkVeKQEae76sx9sBbd3d/DD+4pKYZE0jdtNomUIV/ogtAXvhP0iU6Q==}
+
+  '@secretlint/secretlint-rule-preset-recommend@13.0.6':
+    resolution: {integrity: sha512-5OdYoPKs7LznSY/mFgpJlSY8ayF+clq0gdfOE0ERVfvUifmIDz0yG/d1ij3wZmfpyOw33tk12zUcDZqrXHFodA==}
+    engines: {node: '>=22.0.0'}
+
+  '@secretlint/types@13.0.6':
+    resolution: {integrity: sha512-N1pXCKblM7rdbQ+wAufLLUQ4ToukuPjsCauR42fHlemp8+NXvI4FjDnvLacNbSb/9ccmrY1Isb6WjUfHZgnrRQ==}
+    engines: {node: '>=22.0.0'}
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -429,6 +450,9 @@ packages:
   body-parser@2.3.0:
     resolution: {integrity: sha512-2cGmJupaNgg+QUwVLAucDuWuoMZ6EX9iHDRswZ5lsNYEmwPaRknMPCLZz07yTzVq/83p4o/wzbDZbBrTvGGTIw==}
     engines: {node: '>=18'}
+
+  boundary@2.0.0:
+    resolution: {integrity: sha512-rJKn5ooC9u8q13IMCrW0RSp31pxBCHE3y9V/tp3TdWSLf8Em3p6Di4NBpfzbJge9YjjFEsD0RtFEjtvHL5VyEA==}
 
   brace-expansion@5.0.12:
     resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
@@ -1051,6 +1075,9 @@ packages:
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
 
+  structured-source@4.0.0:
+    resolution: {integrity: sha512-qGzRFNJDjFieQkl/sVOI2dUjHKRyL9dAJi2gCPGJLbJHBIkyOHxjuocpIEfbLioX+qSJpvbYdT49/YCdMznKxA==}
+
   tinybench@6.2.0:
     resolution: {integrity: sha512-78U2TlB2CnVenajOFzf3BKSm0J6oz5L0NV7g32LCPccvYc0lbWvys4d3uUUCS2B1N8PAf2+aekR8i1KbC3HO7Q==}
     engines: {node: '>=20.0.0'}
@@ -1388,6 +1415,21 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
+  '@secretlint/core@13.0.6':
+    dependencies:
+      '@secretlint/profiler': 13.0.6
+      '@secretlint/types': 13.0.6
+      debug: 4.4.3
+      structured-source: 4.0.0
+    transitivePeerDependencies:
+      - supports-color
+
+  '@secretlint/profiler@13.0.6': {}
+
+  '@secretlint/secretlint-rule-preset-recommend@13.0.6': {}
+
+  '@secretlint/types@13.0.6': {}
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -1561,6 +1603,8 @@ snapshots:
       type-is: 2.1.0
     transitivePeerDependencies:
       - supports-color
+
+  boundary@2.0.0: {}
 
   brace-expansion@5.0.12:
     dependencies:
@@ -2176,6 +2220,10 @@ snapshots:
   statuses@2.0.2: {}
 
   std-env@4.3.0: {}
+
+  structured-source@4.0.0:
+    dependencies:
+      boundary: 2.0.0
 
   tinybench@6.2.0: {}
 
