@@ -6,6 +6,8 @@ import {
   SeenLogs,
   TeamDirectory,
   defaultBletherHome,
+  type Credentials,
+  type TeamRecord,
 } from "./keystore.js";
 import { EscalationStore } from "./escalations.js";
 import { PolicyStore } from "./policy.js";
@@ -14,14 +16,22 @@ import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer, createSetupProblemServer } from "./server.js";
 
 /** Something that stops the bridge working, explained for the developer. */
-class SetupProblem extends Error {}
+class SetupProblem extends Error {
+  constructor(
+    message: string,
+    /** Set when another session holds the agent: takes it over, installing the bridge on `server`. */
+    readonly takeOver?: (server: McpServer) => Promise<RelayConnection>,
+  ) {
+    super(message);
+  }
+}
 
 /** What to do about each way the relay can refuse a session. */
 const REFUSAL_FIXES: Partial<
   Record<string, (agent: string, team: string) => string>
 > = {
   "agent-in-use": (agent) =>
-    `Only one session can act as ${agent} at a time. Close the other one (it may be in another terminal, or on another of your devices), or set a different BLETHER_AGENT for this session, then restart it.`,
+    `Only one session can act as ${agent} at a time. If the other one is still in use, close it (it may be in another terminal, or on another of your devices) or set a different BLETHER_AGENT for this session. If this session should be ${agent} instead, use take_over_agent.`,
   "agent-owned-by-another": (agent, team) =>
     `${agent} is another developer's agent. Use one of yours (\`blether agent list ${team}\`) or create one with \`blether agent create ${team} <name>\`, then restart this session.`,
   "not-a-member": () =>
@@ -58,8 +68,30 @@ export async function startBridge(
   } catch (error) {
     if (!(error instanceof SetupProblem)) throw error;
     log(`blether bridge can't start: ${error.message}`);
-    const server = createSetupProblemServer(error.message);
-    return { server, problem: error.message, close: () => server.close() };
+    const { takeOver } = error;
+    let tookOver: RelayConnection | undefined;
+    const server = createSetupProblemServer(error.message, {
+      ...(takeOver
+        ? {
+            takeOver: async (problemServer: McpServer) => {
+              tookOver = await takeOver(problemServer);
+              log(`blether bridge took over ${tookOver.agent}`);
+              return (
+                `This session is now ${tookOver.agent}; the other session was disconnected. ` +
+                "Blether's tools are available now: start by reading your mailbox."
+              );
+            },
+          }
+        : {}),
+    });
+    return {
+      server,
+      problem: error.message,
+      close: async () => {
+        await server.close();
+        await tookOver?.close();
+      },
+    };
   }
 }
 
@@ -112,13 +144,9 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
       "Messages are end-to-end encrypted; the relay sees only who messaged whom, and when.",
   );
 
-  let relay: RelayConnection;
+  const found = { store, credentials, team, agent: agent.data };
   try {
-    relay = await RelayConnection.connect(team.relayUrl, credentials, {
-      scope: { team: team.id, agent: agent.data },
-      witness: new SeenLogs(store.home),
-      readMessages: new ReadMessages(store.home, team.id, agent.data),
-    });
+    return await open(found, false);
   } catch (error) {
     if (!(error instanceof RelayError)) {
       throw new SetupProblem(
@@ -128,16 +156,48 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
     const fix = REFUSAL_FIXES[error.code]?.(agent.data, team.name);
     throw new SetupProblem(
       `The relay refused this session (${error.code}): ${error.message}${fix ? ` ${fix}` : ""}`,
+      error.code === "agent-in-use"
+        ? async (server) => (await open(found, true, server)).connection
+        : undefined,
     );
   }
+}
+
+/**
+ * Connects to the relay as the agent and creates the bridge server, or
+ * installs its tools on `server`. With `takeover`, any other session acting
+ * as the agent is disconnected.
+ */
+async function open(
+  {
+    store,
+    credentials,
+    team,
+    agent,
+  }: {
+    store: FileKeyStore;
+    credentials: Credentials;
+    team: TeamRecord;
+    agent: string;
+  },
+  takeover: boolean,
+  server?: McpServer,
+) {
+  const relay = await RelayConnection.connect(team.relayUrl, credentials, {
+    scope: { team: team.id, agent },
+    witness: new SeenLogs(store.home),
+    readMessages: new ReadMessages(store.home, team.id, agent),
+    takeover,
+  });
   // Another of the developer's devices may have added a device since.
   if (relay.identity && relay.identity.length > credentials.identity.length) {
     store.saveIdentity(relay.identity);
   }
-  const server = createBridgeServer(relay, {
+  const bridge = createBridgeServer(relay, {
     policy: new PolicyStore(store.home).load(),
-    escalations: new EscalationStore(store.home, team.id, agent.data),
-    sentLog: new SentLog(store.home, team.id, agent.data),
+    escalations: new EscalationStore(store.home, team.id, agent),
+    sentLog: new SentLog(store.home, team.id, agent),
+    ...(server ? { server } : {}),
   });
-  return { server, connection: relay };
+  return { server: bridge, connection: relay };
 }

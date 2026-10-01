@@ -94,8 +94,12 @@ class TestClient {
     });
   }
 
-  static async connect(url: string): Promise<TestClient> {
-    const socket = new WebSocket(url);
+  static async connect(
+    url: string,
+    { answerPings = true }: { answerPings?: boolean } = {},
+  ): Promise<TestClient> {
+    // answerPings: false stands in for a session that has silently died.
+    const socket = new WebSocket(url, { autoPong: answerPings });
     // Listen before the socket opens: the relay sends its challenge at once.
     const client = new TestClient(socket);
     await new Promise((resolve, reject) => {
@@ -121,9 +125,13 @@ class TestClient {
   }
 
   /** Answers the relay's challenge and returns its reply: welcome or error. */
-  async sayHello(scope: Scope, as: Developer = alice) {
+  async sayHello(
+    scope: Scope,
+    as: Developer = alice,
+    extra: Record<string, unknown> = {},
+  ) {
     const { challenge } = await this.next("challenge");
-    this.send(helloFrame(scope, challenge, as));
+    this.send({ ...helloFrame(scope, challenge, as), ...extra });
     return this.next();
   }
 
@@ -379,6 +387,34 @@ describe("relay", () => {
       expect(await second.sayHello(inTeam("api"))).toMatchObject({
         code: "agent-in-use",
       });
+    });
+
+    it("lets the owner take over an agent another session is acting as", async () => {
+      const first = await connectAs("api");
+      const closed = new Promise<number>((resolve) =>
+        first.socket.once("close", (code) => resolve(code)),
+      );
+      const second = await connect();
+
+      expect(
+        await second.sayHello(inTeam("api"), alice, { takeover: true }),
+      ).toMatchObject({ type: "welcome", agent: "api" });
+      expect(await closed).toBe(4002);
+
+      const web = await connectAs("web");
+      await web.message("api", "for the new session");
+      expect(textOf((await second.next("deliver")).message)).toBe(
+        "for the new session",
+      );
+    });
+
+    it("never lets another developer take over an agent", async () => {
+      await connectAs("api");
+      const impostor = await connect();
+
+      expect(
+        await impostor.sayHello(inTeam("api"), bob, { takeover: true }),
+      ).toMatchObject({ code: "agent-owned-by-another" });
     });
 
     it("frees the agent name when its session disconnects", async () => {
@@ -759,6 +795,38 @@ describe("relay agents and presence", () => {
       id: requestId,
       code: "not-a-member",
     });
+  });
+});
+
+describe("relay heartbeat", () => {
+  const { ctx, connect, ensureAgent, connectAs } = useRelay({
+    heartbeatMs: 50,
+  });
+
+  it("drops a session that has silently died, freeing its agent", async () => {
+    await ensureAgent("api", alice);
+    const dead = await TestClient.connect(ctx.relay.url, {
+      answerPings: false,
+    });
+    await dead.hello({ team: ctx.team.id, agent: "api" });
+    const dropped = new Promise((resolve) =>
+      dead.socket.once("close", resolve),
+    );
+
+    await dropped;
+
+    await expect(connectAs("api")).resolves.toBeInstanceOf(TestClient);
+  });
+
+  it("keeps a session that answers", async () => {
+    const live = await connectAs("api");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    expect(live.socket.readyState).toBe(1);
+    const second = await connect();
+    expect(
+      await second.sayHello({ team: ctx.team.id, agent: "api" }),
+    ).toMatchObject({ code: "agent-in-use" });
   });
 });
 
