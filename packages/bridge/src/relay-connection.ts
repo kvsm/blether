@@ -78,6 +78,8 @@ export interface ReceivedMessage {
   to: AgentName;
   /** Set when it went to a role or the whole team, rather than just to this agent. */
   audience?: Audience | undefined;
+  /** Set for a hold notice from the sender's bridge, rather than a message its agent wrote. */
+  notice?: "hold" | undefined;
   body: string;
   /** When the sender sent it, by the sender's signed clock. */
   sentAt: string;
@@ -263,7 +265,10 @@ export class RelayConnection {
   async send(
     to: AgentName,
     body: string,
-    audience?: Audience,
+    {
+      audience,
+      kind,
+    }: { audience?: Audience | undefined; kind?: "hold-notice" } = {},
   ): Promise<SendReceipt> {
     const scope = this.requireScope();
     const recipient = await this.findAgent(to);
@@ -288,6 +293,7 @@ export class RelayConnection {
         from: scope.agent,
         to,
         ...(audience ? { audience } : {}),
+        ...(kind ? { kind } : {}),
         body,
         sentAt: new Date().toISOString(),
       },
@@ -551,6 +557,7 @@ export class RelayConnection {
       from: payload.from,
       to: payload.to,
       audience: payload.audience,
+      notice: payload.kind === "hold-notice" ? "hold" : undefined,
       body: payload.body,
       sentAt: payload.sentAt,
       receivedAt: message.receivedAt,
