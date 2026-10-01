@@ -15,12 +15,14 @@ describe("AgentName", () => {
 });
 
 describe("parseFrame", () => {
+  const envelope = { v: 1, copies: { ["k".repeat(43)]: "sealed" } };
+
   it("parses a valid client frame", () => {
     const frame = parseFrame(
       ClientFrame,
-      JSON.stringify({ type: "send", id, to: "api", body: "hi" }),
+      JSON.stringify({ type: "send", id, to: "api", envelope }),
     );
-    expect(frame).toEqual({ type: "send", id, to: "api", body: "hi" });
+    expect(frame).toEqual({ type: "send", id, to: "api", envelope });
   });
 
   it("returns undefined for invalid JSON", () => {
@@ -33,11 +35,22 @@ describe("parseFrame", () => {
     ).toBeUndefined();
   });
 
-  it("rejects an empty message body", () => {
+  it("rejects a plaintext message or an envelope with no copies", () => {
     expect(
       parseFrame(
         ClientFrame,
-        JSON.stringify({ type: "send", id, to: "api", body: "" }),
+        JSON.stringify({ type: "send", id, to: "api", body: "hi" }),
+      ),
+    ).toBeUndefined();
+    expect(
+      parseFrame(
+        ClientFrame,
+        JSON.stringify({
+          type: "send",
+          id,
+          to: "api",
+          envelope: { v: 1, copies: {} },
+        }),
       ),
     ).toBeUndefined();
   });
@@ -47,8 +60,8 @@ describe("parseFrame", () => {
       id,
       from: "web",
       to: "api",
-      body: "hi",
-      sentAt: "2026-10-01T12:00:00.000Z",
+      envelope,
+      receivedAt: "2026-10-01T12:00:00.000Z",
     };
     expect(
       parseFrame(RelayFrame, JSON.stringify({ type: "deliver", message })),
