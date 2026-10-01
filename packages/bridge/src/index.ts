@@ -43,3 +43,8 @@ export {
   type Escalation,
 } from "./escalations.js";
 export { REMINDER_INTERVAL_MS } from "./escalation-tools.js";
+export {
+  scanForSecrets,
+  type SecretFinding,
+  type SecretScanner,
+} from "./secrets.js";

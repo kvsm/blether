@@ -7,6 +7,7 @@ import {
   createBridgeServer,
   runCli,
   type ApprovalPolicy,
+  type SecretScanner,
 } from "@blether/bridge";
 import { verifyIdentityLog } from "@blether/protocol";
 import {
@@ -79,11 +80,14 @@ export function device(root: string, name: string) {
         policy = { outgoing: "free", incoming: "free" },
         client: clientOptions,
         now,
+        scanSecrets,
       }: {
         policy?: ApprovalPolicy;
         client?: ClientOptions;
         /** The bridge's clock, for escalation reminders. */
         now?: () => Date;
+        /** Replaces the bridge's secret scanner. */
+        scanSecrets?: SecretScanner;
       } = {},
     ) {
       const record = teams.get(team)!;
@@ -101,6 +105,7 @@ export function device(root: string, name: string) {
         policy,
         escalations: new EscalationStore(store.home, record.id, agent),
         ...(now ? { now } : {}),
+        ...(scanSecrets ? { scanSecrets } : {}),
       }).connect(b);
       await client.connect(a);
       const call = async (tool: string, args: Record<string, unknown> = {}) => {
