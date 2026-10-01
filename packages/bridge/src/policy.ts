@@ -8,6 +8,7 @@ import {
 import { join } from "node:path";
 import { z } from "zod";
 import { defaultBletherHome } from "./keystore.js";
+import { SendLimits } from "./rate-limit.js";
 
 /**
  * A developer's Approval Policy (see CONTEXT.md): how much their agents may
@@ -30,6 +31,8 @@ export type IncomingLevel = z.infer<typeof IncomingLevel>;
 export const ApprovalPolicy = z.object({
   outgoing: OutgoingLevel,
   incoming: IncomingLevel,
+  /** Limits on sending, to stop runaway loops. Defaults to DEFAULT_SEND_LIMITS. */
+  limits: SendLimits.optional(),
 });
 export type ApprovalPolicy = z.infer<typeof ApprovalPolicy>;
 

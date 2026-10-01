@@ -175,7 +175,7 @@ describe("Approval Policy", () => {
         await kev.run("policy", "set", "--outgoing", "ask-others"),
       ).toMatchObject({ code: 0 });
 
-      expect(new PolicyStore(kev.store.home).load()).toEqual({
+      expect(new PolicyStore(kev.store.home).load()).toMatchObject({
         outgoing: "ask-others",
         incoming: "ask",
       });

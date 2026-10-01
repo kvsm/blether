@@ -39,6 +39,7 @@ import {
   type TeamRecord,
 } from "./keystore.js";
 import { formatEscalations } from "./escalation-tools.js";
+import { DEFAULT_SEND_LIMITS } from "./rate-limit.js";
 import { allPendingEscalations } from "./escalations.js";
 import {
   INCOMING_DESCRIPTIONS,
@@ -79,8 +80,10 @@ Commands:
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
   policy set [--outgoing <level>] [--incoming <level>]
+             [--limit-per-agent <n>] [--limit-per-recipient <n>] [--limit-window <minutes>]
                                      outgoing: ask | ask-others | free
                                      incoming: ask | ask-impactful | free
+                                     limits: most messages an agent sends in the window
 
 Set BLETHER_HOME to keep Blether's files somewhere other than ~/.blether.`;
 
@@ -561,6 +564,10 @@ function policyShow({ store, io }: CliContext): number {
   io.out(
     `Incoming: ${policy.incoming} (${INCOMING_DESCRIPTIONS[policy.incoming]})`,
   );
+  const limits = policy.limits ?? DEFAULT_SEND_LIMITS;
+  io.out(
+    `Limits:   ${limits.perAgent} messages per agent and ${limits.perRecipient} to any one agent, per ${limits.windowMinutes} minutes`,
+  );
   io.out(
     "Outgoing approval is enforced by the bridge, which asks you through your agent's host. " +
       "Incoming approval is guidance given to your agent with each message; your host's own permission settings are what actually stop it acting.",
@@ -574,11 +581,14 @@ function policySet(args: string[], ctx: CliContext): number {
     options: {
       outgoing: { type: "string" },
       incoming: { type: "string" },
+      "limit-per-agent": { type: "string" },
+      "limit-per-recipient": { type: "string" },
+      "limit-window": { type: "string" },
     },
   });
-  if (values.outgoing === undefined && values.incoming === undefined) {
+  if (Object.values(values).every((v) => v === undefined)) {
     throw new CliError(
-      "Say what to change: blether policy set --outgoing <ask|ask-others|free> --incoming <ask|ask-impactful|free>",
+      "Say what to change, for example: blether policy set --outgoing ask-others, or --limit-per-recipient 20",
     );
   }
   const policies = new PolicyStore(ctx.store.home);
@@ -591,7 +601,33 @@ function policySet(args: string[], ctx: CliContext): number {
   if (!incoming.success) {
     throw new CliError("--incoming must be ask, ask-impactful or free.");
   }
-  policies.save({ outgoing: outgoing.data, incoming: incoming.data });
+  const currentLimits = current.limits ?? DEFAULT_SEND_LIMITS;
+  const limit = (flag: string, value: string | undefined, fallback: number) => {
+    if (value === undefined) return fallback;
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new CliError(`--${flag} must be a whole number, 1 or more.`);
+    }
+    return n;
+  };
+  const limits = {
+    perAgent: limit(
+      "limit-per-agent",
+      values["limit-per-agent"],
+      currentLimits.perAgent,
+    ),
+    perRecipient: limit(
+      "limit-per-recipient",
+      values["limit-per-recipient"],
+      currentLimits.perRecipient,
+    ),
+    windowMinutes: limit(
+      "limit-window",
+      values["limit-window"],
+      currentLimits.windowMinutes,
+    ),
+  };
+  policies.save({ outgoing: outgoing.data, incoming: incoming.data, limits });
   policyShow(ctx);
   ctx.io.out("Restart your agent sessions for the change to take effect.");
   return 0;
