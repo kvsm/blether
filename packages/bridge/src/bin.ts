@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 import { AgentName } from "@blether/protocol";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { FileKeyStore, SeenLogs, TeamDirectory } from "./keystore.js";
+import {
+  FileKeyStore,
+  ReadMessages,
+  SeenLogs,
+  TeamDirectory,
+} from "./keystore.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer } from "./server.js";
 
@@ -44,12 +49,13 @@ const team =
 
 console.error(
   `blether bridge acting as ${agent.data} in team ${team.name} via ${team.relayUrl}\n` +
-    "WARNING: messages aren't end-to-end encrypted yet; the relay can read them.",
+    "Messages are end-to-end encrypted; the relay sees only who messaged whom, and when.",
 );
 
 const relay = await RelayConnection.connect(team.relayUrl, credentials, {
   scope: { team: team.id, agent: agent.data! },
   witness: new SeenLogs(store.home),
+  readMessages: new ReadMessages(store.home, team.id, agent.data!),
 }).catch((error: unknown) =>
   fail(
     error instanceof RelayError

@@ -53,7 +53,8 @@ const sessionKey = ({ team, agent }: AgentScope) => `${team}\n${agent}`;
  * accepts it from a member of the team, and its messages never leave the
  * team. A CLI session names neither, and can only read and extend team logs.
  * A session can only act as an agent its developer created in the team log.
- * There is no encryption yet.
+ * Message content is end-to-end encrypted: the relay stores and forwards
+ * envelopes it can't read.
  */
 export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const store = new MailboxStore(options.databasePath ?? ":memory:");
@@ -393,8 +394,8 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             id: frame.id,
             from: scope.agent,
             to: frame.to,
-            body: frame.body,
-            sentAt: now().toISOString(),
+            envelope: frame.envelope,
+            receivedAt: now().toISOString(),
           };
           if (!store.add(scope.team, message)) {
             fail(

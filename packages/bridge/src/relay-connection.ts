@@ -4,7 +4,9 @@ import {
   RelayFrame,
   TeamError,
   compareLogs,
+  openMessage,
   parseFrame,
+  sealMessage,
   signChallenge,
   verifyIdentityLog,
   verifyTeamLog,
@@ -25,6 +27,7 @@ import {
   StaleLogError,
   type Credentials,
   type LogWitness,
+  type ReadMessageLog,
 } from "./keystore.js";
 
 /** The relay refused something, or its answer didn't verify. */
@@ -56,7 +59,40 @@ export interface ConnectOptions {
   scope?: AgentScope;
   /** Checks logs from the relay against what this device has seen before. */
   witness?: LogWitness;
+  /** Remembers which messages this agent has read, so a relay replaying one is caught. */
+  readMessages?: ReadMessageLog;
 }
+
+/** A message this device decrypted and verified. */
+export interface ReceivedMessage {
+  kind: "message";
+  id: string;
+  from: AgentName;
+  to: AgentName;
+  body: string;
+  /** When the sender sent it, by the sender's signed clock. */
+  sentAt: string;
+  /** When the relay accepted it. */
+  receivedAt: string;
+}
+
+/** A message this device couldn't show, and why. */
+export interface UnreadableMessage {
+  kind: "unreadable";
+  id: string;
+  /** Who the relay says sent it. Unverified. */
+  from: AgentName;
+  receivedAt: string;
+  /**
+   * `elsewhere`: it was encrypted for the developer's other devices only
+   * (sent before this device was added), and stays unread for them.
+   * `rejected`: it didn't decrypt or verify, and has been discarded.
+   */
+  reason: "elsewhere" | "rejected";
+  detail: string;
+}
+
+export type MailboxItem = ReceivedMessage | UnreadableMessage;
 
 interface Welcome {
   developer: string;
@@ -96,9 +132,13 @@ interface TeamReply {
  * agent, and only reads and extends team logs.
  */
 export class RelayConnection {
-  private readonly unread: Message[] = [];
+  private readonly unread: MailboxItem[] = [];
   /** Ids of every message received, so redeliveries after reconnecting are ignored. */
   private readonly seen = new Set<string>();
+  /** Deliveries are decrypted and verified one at a time, in order. */
+  private inbox: Promise<void> = Promise.resolve();
+  /** The team log as last verified, refreshed when it's missing something. */
+  private teamCache: VerifiedTeam | undefined;
   private readonly sends = new Map<string, Pending<SendReceipt>>();
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
   private readonly teamRequests = new Map<string, Pending<TeamReply>>();
@@ -113,12 +153,14 @@ export class RelayConnection {
    * developer's devices has added a device since; callers should save it.
    */
   identity: IdentityLog | undefined;
-  private readonly arrivalListeners = new Set<(message: Message) => void>();
+  private readonly arrivalListeners = new Set<(item: MailboxItem) => void>();
 
   private constructor(
     private readonly socket: WebSocket,
+    private readonly credentials: Credentials,
     readonly scope: AgentScope | undefined,
     private readonly witness: LogWitness | undefined,
+    private readonly readMessages: ReadMessageLog | undefined,
   ) {
     socket.on("message", (data) => this.receive(data.toString()));
     socket.on("close", () => {
@@ -154,12 +196,18 @@ export class RelayConnection {
   static async connect(
     url: string,
     credentials: Credentials,
-    { scope, witness }: ConnectOptions = {},
+    { scope, witness, readMessages }: ConnectOptions = {},
   ): Promise<RelayConnection> {
     const socket = new WebSocket(url);
     // Attach the frame handler at once: the relay sends its challenge as soon
     // as the connection opens, and pending messages straight after welcome.
-    const connection = new RelayConnection(socket, scope, witness);
+    const connection = new RelayConnection(
+      socket,
+      credentials,
+      scope,
+      witness,
+      readMessages,
+    );
     const challenged = new Promise<string>((resolve, reject) => {
       connection.challenge = { resolve, reject };
     });
@@ -196,10 +244,41 @@ export class RelayConnection {
     return connection;
   }
 
-  /** Sends a message, resolving once the relay has accepted it. */
-  send(to: AgentName, body: string): Promise<SendReceipt> {
+  /**
+   * Encrypts a message for every device of the developer who owns agent
+   * `to`, as recorded in the verified team log, and sends it. Resolves once
+   * the relay has accepted it.
+   */
+  async send(to: AgentName, body: string): Promise<SendReceipt> {
+    const scope = this.requireScope();
+    const recipient = await this.findAgent(to);
+    if (!recipient) {
+      throw new RelayError(
+        "unknown-agent",
+        `There is no agent called ${to} in this team.`,
+      );
+    }
+    const devices = recipient.identity?.devices ?? [];
+    if (devices.length === 0) {
+      throw new RelayError(
+        "untrusted-reply",
+        `Couldn't find the devices of ${to}'s developer to encrypt for.`,
+      );
+    }
     const id = randomUUID();
-    return this.request(this.sends, id, { type: "send", id, to, body });
+    const envelope = sealMessage(
+      {
+        id,
+        team: scope.team,
+        from: scope.agent,
+        to,
+        body,
+        sentAt: new Date().toISOString(),
+      },
+      this.credentials.device,
+      devices,
+    );
+    return this.request(this.sends, id, { type: "send", id, to, envelope });
   }
 
   /** The `limit` messages this agent sent most recently, newest first. */
@@ -218,18 +297,31 @@ export class RelayConnection {
   }
 
   /** Calls `listener` whenever a new message arrives. Returns a function that unsubscribes. */
-  onArrival(listener: (message: Message) => void): () => void {
+  onArrival(listener: (item: MailboxItem) => void): () => void {
     this.arrivalListeners.add(listener);
     return () => this.arrivalListeners.delete(listener);
   }
 
-  /** Returns every unread message, oldest first, and marks them read. */
-  readMailbox(): Message[] {
-    const messages = this.unread.splice(0);
-    if (messages.length > 0 && this.socket.readyState === WebSocket.OPEN) {
-      this.write({ type: "read", ids: messages.map((m) => m.id) });
+  /**
+   * Returns everything waiting in the mailbox, oldest first, and marks it
+   * read, except messages encrypted only for the developer's other devices,
+   * which stay unread for them.
+   */
+  readMailbox(): MailboxItem[] {
+    const items = this.unread.splice(0);
+    const read = items
+      .filter((item) => item.kind === "message" || item.reason === "rejected")
+      .map((item) => item.id);
+    this.readMessages?.add(read);
+    if (read.length > 0 && this.socket.readyState === WebSocket.OPEN) {
+      this.write({ type: "read", ids: read });
     }
-    return messages;
+    return items;
+  }
+
+  /** Resolves once every delivery received so far has been decrypted and verified. */
+  settled(): Promise<void> {
+    return this.inbox;
   }
 
   /** Starts a team whose log is `log`, returning it as the relay stored it. */
@@ -255,10 +347,10 @@ export class RelayConnection {
 
   /** The roster of this session's team: every agent, its developer and roles, and whether it's online. */
   async roster(): Promise<RosterEntry[]> {
-    if (!this.scope) throw new Error("This session isn't acting as an agent.");
+    const scope = this.requireScope();
     const [{ team, identities }, online] = await Promise.all([
-      this.getTeam(this.scope.team),
-      this.getPresence(this.scope.team),
+      this.currentTeam(true),
+      this.getPresence(scope.team),
     ]);
     return team.agents.map((agent) => ({
       name: agent.name,
@@ -289,6 +381,115 @@ export class RelayConnection {
       entry,
     });
     return this.verifyReply(reply, id);
+  }
+
+  private requireScope(): AgentScope {
+    if (!this.scope) throw new Error("This session isn't acting as an agent.");
+    return this.scope;
+  }
+
+  /** The verified team log, fetched again if `refresh` or not yet fetched. */
+  private async currentTeam(refresh = false): Promise<VerifiedTeam> {
+    if (!this.teamCache || refresh) {
+      this.teamCache = await this.getTeam(this.requireScope().team);
+    }
+    return this.teamCache;
+  }
+
+  /**
+   * Finds agent `name` in the team log, with its owner's identity. If the
+   * cached log doesn't have it (or its owner doesn't have `mustHaveDevice`),
+   * fetches the log again, since the agent may have been created, or a device
+   * added, since.
+   */
+  private async findAgent(name: string, mustHaveDevice?: string) {
+    for (const refresh of [false, true]) {
+      const { team, identities } = await this.currentTeam(refresh);
+      const agent = team.agents.find((a) => a.name === name);
+      const identity = agent && identities.get(agent.owner);
+      if (
+        agent &&
+        (!mustHaveDevice || identity?.devices.includes(mustHaveDevice))
+      ) {
+        return { agent, identity };
+      }
+    }
+    return undefined;
+  }
+
+  /** Decrypts and verifies one delivery, then puts it in the mailbox. */
+  private async accept(message: Message): Promise<void> {
+    // A message already read coming back means the relay is replaying it.
+    if (this.readMessages?.has(message.id)) return;
+    const item = await this.verifyDelivery(message);
+    this.unread.push(item);
+    for (const listener of this.arrivalListeners) listener(item);
+  }
+
+  /**
+   * Opens this device's copy of a delivery and checks it: the signature, that
+   * its signed addressing matches how the relay delivered it, and that it was
+   * signed by a device of the developer who owns the sending agent.
+   */
+  private async verifyDelivery(message: Message): Promise<MailboxItem> {
+    const scope = this.requireScope();
+    const unreadable = (
+      reason: UnreadableMessage["reason"],
+      detail: string,
+    ): UnreadableMessage => ({
+      kind: "unreadable",
+      id: message.id,
+      from: message.from,
+      receivedAt: message.receivedAt,
+      reason,
+      detail,
+    });
+
+    const opened = openMessage(message.envelope, this.credentials.device);
+    if (!opened.ok) {
+      return opened.reason === "elsewhere"
+        ? unreadable(
+            "elsewhere",
+            "It was encrypted for another of your devices, probably because it was sent before this device was added. Read it there.",
+          )
+        : unreadable(
+            "rejected",
+            "It couldn't be decrypted or its signature is invalid, so it was discarded.",
+          );
+    }
+    const { payload, signer } = opened;
+    if (
+      payload.id !== message.id ||
+      payload.team !== scope.team ||
+      payload.to !== scope.agent ||
+      payload.from !== message.from
+    ) {
+      return unreadable(
+        "rejected",
+        "Its signed addressing doesn't match how it was delivered, so it was discarded.",
+      );
+    }
+    let sender: Awaited<ReturnType<RelayConnection["findAgent"]>>;
+    try {
+      sender = await this.findAgent(payload.from, signer);
+    } catch {
+      sender = undefined;
+    }
+    if (!sender) {
+      return unreadable(
+        "rejected",
+        `It wasn't signed by a device of the developer who owns ${payload.from}, so it was discarded.`,
+      );
+    }
+    return {
+      kind: "message",
+      id: payload.id,
+      from: payload.from,
+      to: payload.to,
+      body: payload.body,
+      sentAt: payload.sentAt,
+      receivedAt: message.receivedAt,
+    };
   }
 
   /**
@@ -380,12 +581,13 @@ export class RelayConnection {
         this.welcome?.resolve(frame);
         this.welcome = undefined;
         return;
-      case "deliver":
-        if (this.seen.has(frame.message.id)) return;
-        this.seen.add(frame.message.id);
-        this.unread.push(frame.message);
-        for (const listener of this.arrivalListeners) listener(frame.message);
+      case "deliver": {
+        const { message } = frame;
+        if (this.seen.has(message.id)) return;
+        this.seen.add(message.id);
+        this.inbox = this.inbox.then(() => this.accept(message));
         return;
+      }
       case "sent":
         take(this.sends, frame.id)?.resolve({
           id: frame.id,

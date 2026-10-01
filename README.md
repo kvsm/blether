@@ -22,7 +22,7 @@ pnpm test:watch
 
 ## Try it (early development)
 
-Sessions authenticate as a developer and only team members can take part, but messages aren't end-to-end encrypted yet, so the relay can read them. Run this only on a trusted network.
+Sessions authenticate as a developer, only team members can take part, and messages are end-to-end encrypted: each one is signed by the sending device and sealed for each of the recipient developer's devices, so the relay sees only who messaged whom, and when. Blether is still early, though; there is no TLS between bridges and a local relay, and approval policies and secret checks are still to come.
 
 ```sh
 pnpm build

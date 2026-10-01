@@ -10,7 +10,7 @@ import type {
 } from "@blether/protocol";
 
 /** Bumped whenever the schema changes incompatibly. */
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 export class IncompatibleDatabaseError extends Error {
   constructor(path: string, version: number) {
@@ -25,7 +25,8 @@ export class IncompatibleDatabaseError extends Error {
 /**
  * Durable storage for the relay: developers' identity logs, teams'
  * membership logs (which also record each team's agents), and agents'
- * mailboxes. A message's body is kept only until the recipient reads it;
+ * mailboxes. Messages are end-to-end encrypted envelopes the relay can't
+ * read, and each is kept only until the recipient reads it;
  * after that the relay keeps just enough to report its delivery status to
  * the sender.
  */
@@ -65,8 +66,8 @@ export class MailboxStore {
         team      TEXT NOT NULL REFERENCES teams (id),
         sender    TEXT NOT NULL,
         recipient TEXT NOT NULL,
-        body      TEXT,
-        sent_at   TEXT NOT NULL,
+        envelope    TEXT,
+        received_at TEXT NOT NULL,
         status    TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'read'))
       );
       CREATE INDEX IF NOT EXISTS messages_unread
@@ -144,7 +145,7 @@ export class MailboxStore {
   add(team: string, message: Message): boolean {
     const { changes } = this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages (id, team, sender, recipient, body, sent_at, status)
+        `INSERT OR IGNORE INTO messages (id, team, sender, recipient, envelope, received_at, status)
          VALUES (?, ?, ?, ?, ?, ?, 'queued')`,
       )
       .run(
@@ -152,8 +153,8 @@ export class MailboxStore {
         team,
         message.from,
         message.to,
-        message.body,
-        message.sentAt,
+        JSON.stringify(message.envelope),
+        message.receivedAt,
       );
     return changes === 1;
   }
@@ -169,7 +170,7 @@ export class MailboxStore {
   /** Marks messages in an agent's mailbox read and discards their bodies. Ids for other mailboxes are ignored. */
   markRead(team: string, agent: AgentName, ids: readonly string[]): void {
     const update = this.db.prepare(
-      `UPDATE messages SET status = 'read', body = NULL
+      `UPDATE messages SET status = 'read', envelope = NULL
        WHERE id = ? AND team = ? AND recipient = ? AND status <> 'read'`,
     );
     for (const id of ids) update.run(id, team, agent);
@@ -179,7 +180,7 @@ export class MailboxStore {
   unread(team: string, agent: AgentName): Message[] {
     const rows = this.db
       .prepare(
-        `SELECT id, sender, recipient, body, sent_at FROM messages
+        `SELECT id, sender, recipient, envelope, received_at FROM messages
          WHERE team = ? AND recipient = ? AND status <> 'read' ORDER BY seq`,
       )
       .all(team, agent) as unknown as MessageRow[];
@@ -187,8 +188,8 @@ export class MailboxStore {
       id: row.id,
       from: row.sender,
       to: row.recipient,
-      body: row.body,
-      sentAt: row.sent_at,
+      envelope: JSON.parse(row.envelope) as Message["envelope"],
+      receivedAt: row.received_at,
     }));
   }
 
@@ -196,14 +197,14 @@ export class MailboxStore {
   sentBy(team: string, agent: AgentName, limit: number): SentMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT id, recipient, sent_at, status FROM messages
+        `SELECT id, recipient, received_at, status FROM messages
          WHERE team = ? AND sender = ? ORDER BY seq DESC LIMIT ?`,
       )
       .all(team, agent, limit) as unknown as SentRow[];
     return rows.map((row) => ({
       id: row.id,
       to: row.recipient,
-      sentAt: row.sent_at,
+      sentAt: row.received_at,
       status: row.status,
     }));
   }
@@ -217,13 +218,13 @@ interface MessageRow {
   id: string;
   sender: string;
   recipient: string;
-  body: string;
-  sent_at: string;
+  envelope: string;
+  received_at: string;
 }
 
 interface SentRow {
   id: string;
   recipient: string;
-  sent_at: string;
+  received_at: string;
   status: DeliveryStatus;
 }

@@ -29,6 +29,18 @@ import { startRelay, type Relay, type RelayOptions } from "./relay.js";
 
 type FrameOf<T extends RelayFrame["type"]> = Extract<RelayFrame, { type: T }>;
 
+/**
+ * The relay can't read envelopes, so these tests use stand-ins: a single
+ * "copy" holding the test's text in the clear, under a made-up device key.
+ */
+const STAND_IN_DEVICE = "d".repeat(43);
+const opaque = (text: string) => ({
+  v: 1,
+  copies: { [STAND_IN_DEVICE]: text },
+});
+const textOf = (message: { envelope: { copies: Record<string, string> } }) =>
+  message.envelope.copies[STAND_IN_DEVICE];
+
 interface Developer {
   device: DeviceKey;
   identity: IdentityLog;
@@ -131,9 +143,9 @@ class TestClient {
   }
 
   /** Sends a message and waits for the relay to accept it. */
-  async message(to: string, body: string) {
+  async message(to: string, text: string) {
     const id = randomUUID();
-    this.send({ type: "send", id, to, body });
+    this.send({ type: "send", id, to, envelope: opaque(text) });
     return this.next("sent");
   }
 
@@ -343,7 +355,7 @@ describe("relay", () => {
     it("refuses to send before hello", async () => {
       const web = await connect();
       const id = randomUUID();
-      web.send({ type: "send", id, to: "api", body: "hi" });
+      web.send({ type: "send", id, to: "api", envelope: opaque("hi") });
 
       expect(await web.next("error")).toMatchObject({
         id,
@@ -516,9 +528,9 @@ describe("relay", () => {
         id: sent.id,
         from: "web",
         to: "api",
-        body: "is /users changing?",
       });
-      expect(Date.parse(message.sentAt)).not.toBeNaN();
+      expect(textOf(message)).toBe("is /users changing?");
+      expect(Date.parse(message.receivedAt)).not.toBeNaN();
     });
 
     it("stamps the sender from the connection, not the frame", async () => {
@@ -529,7 +541,7 @@ describe("relay", () => {
         type: "send",
         id: randomUUID(),
         to: "api",
-        body: "hi",
+        envelope: opaque("hi"),
         from: "admin",
       });
 
@@ -539,7 +551,7 @@ describe("relay", () => {
     it("refuses a message to an agent the team doesn't have", async () => {
       const web = await connectAs("web");
       const id = randomUUID();
-      web.send({ type: "send", id, to: "apii", body: "typo?" });
+      web.send({ type: "send", id, to: "apii", envelope: opaque("typo?") });
 
       expect(await web.next("error")).toMatchObject({
         id,
@@ -552,7 +564,7 @@ describe("relay", () => {
       const web = await connectAs("web");
       const { id } = await web.message("api", "first");
 
-      web.send({ type: "send", id, to: "api", body: "second" });
+      web.send({ type: "send", id, to: "api", envelope: opaque("second") });
 
       expect(await web.next("error")).toMatchObject({
         id,
@@ -563,7 +575,7 @@ describe("relay", () => {
     it("refuses messages from a CLI session", async () => {
       const session = await cli();
       const id = randomUUID();
-      session.send({ type: "send", id, to: "api", body: "hi" });
+      session.send({ type: "send", id, to: "api", envelope: opaque("hi") });
 
       expect(await session.next("error")).toMatchObject({
         id,
@@ -589,7 +601,12 @@ describe("relay", () => {
       const web = await connectAs("web");
 
       const id = randomUUID();
-      web.send({ type: "send", id, to: "api", body: "wrong team?" });
+      web.send({
+        type: "send",
+        id,
+        to: "api",
+        envelope: opaque("wrong team?"),
+      });
       expect(await web.next("error")).toMatchObject({
         id,
         code: "unknown-agent",
@@ -597,7 +614,7 @@ describe("relay", () => {
 
       const api = await connectAs("api");
       await web.message("api", "right team");
-      expect((await api.next("deliver")).message.body).toBe("right team");
+      expect(textOf((await api.next("deliver")).message)).toBe("right team");
       const stray = await Promise.race([
         apiElsewhere.next("deliver"),
         new Promise((resolve) => setTimeout(() => resolve("nothing"), 100)),
@@ -616,8 +633,8 @@ describe("relay", () => {
       expect([first.status, second.status]).toEqual(["queued", "queued"]);
 
       const api = await connectAs("api");
-      expect((await api.next("deliver")).message.body).toBe("first");
-      expect((await api.next("deliver")).message.body).toBe("second");
+      expect(textOf((await api.next("deliver")).message)).toBe("first");
+      expect(textOf((await api.next("deliver")).message)).toBe("second");
     });
 
     it("delivers unread messages again to the agent's next session", async () => {
@@ -858,10 +875,9 @@ describe("relay persistence", () => {
     try {
       const apiAgain = await TestClient.connect(after.url);
       await apiAgain.hello({ team, agent: "api" });
-      expect((await apiAgain.next("deliver")).message).toMatchObject({
-        id,
-        body: "survive the restart",
-      });
+      const { message } = await apiAgain.next("deliver");
+      expect(message.id).toBe(id);
+      expect(textOf(message)).toBe("survive the restart");
       await apiAgain.close();
     } finally {
       await after.close();

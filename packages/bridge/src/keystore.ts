@@ -236,3 +236,59 @@ export class TeamDirectory {
     writePrivate(this.path(record.name), TeamRecord.parse(record));
   }
 }
+
+/** Which messages an agent has read, so a relay replaying one is noticed. */
+export interface ReadMessageLog {
+  has(id: string): boolean;
+  add(ids: readonly string[]): void;
+}
+
+/**
+ * Remembers the ids of messages an agent has read on this device, under
+ * `<home>/seen/messages`, keeping the most recent `limit`.
+ */
+export class ReadMessages implements ReadMessageLog {
+  private ids: string[] | undefined;
+
+  constructor(
+    readonly home: string,
+    private readonly team: string,
+    private readonly agent: string,
+    private readonly limit = 10_000,
+  ) {}
+
+  private get path() {
+    if (!/^[A-Za-z0-9_-]+$/.test(this.team + this.agent)) {
+      throw new Error("Bad team or agent name.");
+    }
+    return join(
+      this.home,
+      "seen",
+      "messages",
+      `${this.team}.${this.agent}.json`,
+    );
+  }
+
+  private load(): string[] {
+    this.ids ??= existsSync(this.path)
+      ? z.array(z.string()).parse(readJson(this.path))
+      : [];
+    return this.ids;
+  }
+
+  has(id: string): boolean {
+    return this.load().includes(id);
+  }
+
+  add(ids: readonly string[]): void {
+    if (ids.length === 0) return;
+    const known = this.load();
+    const merged = [...known, ...ids.filter((id) => !known.includes(id))];
+    this.ids = merged.slice(-this.limit);
+    mkdirSync(join(this.home, "seen", "messages"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writePrivate(this.path, this.ids);
+  }
+}

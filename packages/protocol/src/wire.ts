@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PublicKey, Signature } from "./crypto.js";
+import { Envelope } from "./envelope.js";
 import { IdentityLog } from "./identity.js";
 import { AgentName } from "./names.js";
 import { SignedTeamEntry, TeamLog } from "./team.js";
@@ -14,20 +15,25 @@ import { SignedTeamEntry, TeamLog } from "./team.js";
  *
  * A bridge's hello names a team and an agent: the session then acts as that
  * agent and can message other agents in the team. The CLI's hello names
- * neither: the session can only read and extend team membership logs. There
- * is no encryption yet.
+ * neither: the session can only read and extend team membership logs.
+ * Message content travels only as end-to-end encrypted envelopes.
  *
  * A session receives every message still unread in its agent's mailbox when
  * it says hello, so a bridge may see the same message again after
  * reconnecting and should ignore ids it already holds.
  */
 
+/**
+ * A message as the relay holds and delivers it. The content is an end-to-end
+ * encrypted envelope the relay can't read; `from` is stamped by the relay
+ * from the sending session, and `receivedAt` is when the relay accepted it.
+ */
 export const Message = z.object({
   id: z.uuid(),
   from: AgentName,
   to: AgentName,
-  body: z.string().min(1),
-  sentAt: z.iso.datetime(),
+  envelope: Envelope,
+  receivedAt: z.iso.datetime(),
 });
 export type Message = z.infer<typeof Message>;
 
@@ -59,7 +65,7 @@ export const ClientFrame = z.discriminatedUnion("type", [
     type: z.literal("send"),
     id: z.uuid(),
     to: AgentName,
-    body: z.string().min(1),
+    envelope: Envelope,
   }),
   /** The agent has read these messages from its mailbox. */
   z.object({ type: z.literal("read"), ids: z.array(z.uuid()).min(1) }),

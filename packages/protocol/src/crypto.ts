@@ -65,6 +65,40 @@ export function verify(
   }
 }
 
+/**
+ * Encrypts `message` so that only the holder of device `recipient`'s secret
+ * key can read it (a libsodium sealed box, using the X25519 form of the
+ * device's Ed25519 key). The sender is anonymous at this layer; sign first.
+ */
+export function sealFor(recipient: PublicKey, message: string): string {
+  return encode(
+    sodium.crypto_box_seal(
+      message,
+      sodium.crypto_sign_ed25519_pk_to_curve25519(decode(recipient)),
+    ),
+  );
+}
+
+/** Opens a sealed box addressed to `device`, or returns undefined if it can't. Never throws. */
+export function openSealed(
+  device: DeviceKey,
+  ciphertext: string,
+): string | undefined {
+  try {
+    const publicKey = sodium.crypto_sign_ed25519_pk_to_curve25519(
+      decode(device.publicKey),
+    );
+    const secretKey = sodium.crypto_sign_ed25519_sk_to_curve25519(
+      decode(device.secretKey),
+    );
+    return sodium.to_string(
+      sodium.crypto_box_seal_open(decode(ciphertext), publicKey, secretKey),
+    );
+  } catch {
+    return undefined;
+  }
+}
+
 /** A 256-bit BLAKE2b hash of `message`, base64url-encoded. */
 export function hash(message: string): string {
   return encode(sodium.crypto_generichash(32, message, null));
