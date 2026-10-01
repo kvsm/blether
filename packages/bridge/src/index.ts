@@ -20,6 +20,7 @@ export {
 export {
   CLAUDE_CHANNEL,
   CLAUDE_CHANNEL_NOTIFICATION,
+  MAILBOX_URI,
   createBridgeServer,
   createSetupProblemServer,
   type BridgeOptions,
