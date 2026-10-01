@@ -1,8 +1,13 @@
 import type { AddressInfo } from "node:net";
 import {
   ClientFrame,
+  IdentityError,
   parseFrame,
+  randomToken,
+  verifyChallenge,
+  verifyIdentityLog,
   type AgentName,
+  type Identity,
   type ErrorCode,
   type Message,
   type RelayFrame,
@@ -28,9 +33,10 @@ export interface Relay {
  * Starts a relay that holds agents' mailboxes and passes messages between
  * connected bridges.
  *
- * Walking-skeleton behaviour: there is no identity, team or encryption. Until
- * agents are created deliberately (#8), any agent a session has ever acted as
- * can be messaged.
+ * Every session must prove which developer it belongs to (see the protocol's
+ * auth.ts). There are no teams or encryption yet. Until agents are created
+ * deliberately (#8), the first developer to act as an agent name owns it, and
+ * any agent a session has ever acted as can be messaged.
  */
 export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const store = new MailboxStore(options.databasePath ?? ":memory:");
@@ -53,10 +59,17 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
 
   wss.on("connection", (socket) => {
     let agent: AgentName | undefined;
+    const challenge = randomToken();
 
     const send = (frame: RelayFrame) => socket.send(JSON.stringify(frame));
     const fail = (code: ErrorCode, message: string, id?: string) =>
       send({ type: "error", code, message, ...(id ? { id } : {}) });
+    const refuse = (code: ErrorCode, message: string) => {
+      fail(code, message);
+      socket.close();
+    };
+
+    send({ type: "challenge", challenge });
 
     socket.on("message", (data) => {
       const frame = parseFrame(ClientFrame, data.toString());
@@ -73,18 +86,49 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           fail("already-introduced", `This connection is already ${agent}.`);
           return;
         }
+        let developer: Identity;
+        try {
+          developer = verifyIdentityLog(frame.identity);
+        } catch (error) {
+          if (!(error instanceof IdentityError)) throw error;
+          refuse("authentication-failed", error.message);
+          return;
+        }
+        if (
+          !developer.machines.includes(frame.machine) ||
+          !verifyChallenge(
+            frame.machine,
+            challenge,
+            frame.agent,
+            frame.signature,
+          )
+        ) {
+          refuse(
+            "authentication-failed",
+            "The challenge wasn't signed by one of this developer's machines.",
+          );
+          return;
+        }
+        const owner = store.agentOwner(frame.agent);
+        if (owner && owner !== developer.id) {
+          refuse(
+            "agent-owned-by-another",
+            `${frame.agent} belongs to another developer.`,
+          );
+          return;
+        }
         if (sessions.has(frame.agent)) {
-          fail(
+          refuse(
             "agent-in-use",
             `Another session is already acting as ${frame.agent}.`,
           );
-          socket.close();
           return;
         }
+        store.saveDeveloper(developer, frame.identity);
+        store.claimAgent(frame.agent, developer.id);
         agent = frame.agent;
         sessions.set(agent, socket);
-        store.rememberAgent(agent);
-        send({ type: "welcome", agent });
+        send({ type: "welcome", agent, developer: developer.id });
         for (const message of store.unread(agent)) deliver(socket, message);
         return;
       }
@@ -100,7 +144,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
 
       switch (frame.type) {
         case "send": {
-          if (!store.isKnownAgent(frame.to)) {
+          if (!store.agentOwner(frame.to)) {
             fail(
               "unknown-agent",
               `There is no agent called ${frame.to}.`,

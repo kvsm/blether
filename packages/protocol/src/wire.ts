@@ -1,9 +1,15 @@
 import { z } from "zod";
+import { PublicKey, Signature } from "./crypto.js";
+import { IdentityLog } from "./identity.js";
 
 /**
  * Frames exchanged between a bridge and the relay over a WebSocket, one JSON
- * object per WebSocket message. This is the insecure dev-mode wire format of
- * the walking skeleton: no identity, teams or encryption yet.
+ * object per WebSocket message.
+ *
+ * On connecting, the relay sends a `challenge`. The bridge answers with
+ * `hello`, carrying its developer's identity log and a signature of the
+ * challenge by one of that identity's machines (see auth.ts). There are no
+ * teams or encryption yet.
  *
  * A session receives every message still unread in its agent's mailbox when
  * it says hello, so a bridge may see the same message again after
@@ -44,7 +50,13 @@ export type SentMessage = z.infer<typeof SentMessage>;
 /** Frames a bridge sends to the relay. */
 export const ClientFrame = z.discriminatedUnion("type", [
   /** First frame on a connection: the session starts acting as `agent`. */
-  z.object({ type: z.literal("hello"), agent: AgentName }),
+  z.object({
+    type: z.literal("hello"),
+    agent: AgentName,
+    identity: IdentityLog,
+    machine: PublicKey,
+    signature: Signature,
+  }),
   z.object({
     type: z.literal("send"),
     id: z.uuid(),
@@ -64,6 +76,8 @@ export type ClientFrame = z.infer<typeof ClientFrame>;
 
 export const ErrorCode = z.enum([
   "malformed-frame",
+  "authentication-failed",
+  "agent-owned-by-another",
   "not-introduced",
   "already-introduced",
   "agent-in-use",
@@ -74,7 +88,14 @@ export type ErrorCode = z.infer<typeof ErrorCode>;
 
 /** Frames the relay sends to a bridge. */
 export const RelayFrame = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("welcome"), agent: AgentName }),
+  /** First frame on a connection: sign this to authenticate. */
+  z.object({ type: z.literal("challenge"), challenge: z.string().min(32) }),
+  z.object({
+    type: z.literal("welcome"),
+    agent: AgentName,
+    /** The authenticated developer's identity id. */
+    developer: z.string(),
+  }),
   /** The relay accepted the `send` frame with this id. */
   z.object({
     type: z.literal("sent"),

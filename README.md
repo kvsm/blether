@@ -20,13 +20,14 @@ pnpm check      # lint, format check, typecheck, test
 pnpm test:watch
 ```
 
-## Try it (insecure dev mode)
+## Try it (early development)
 
-There is no identity, team or encryption yet. Run this only on a trusted network.
+Sessions authenticate as a developer, but there are no teams or encryption yet: any developer known to the relay can message any agent. Run this only on a trusted network.
 
 ```sh
 pnpm build
-node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
+node packages/relay/dist/bin.js                       # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
+node packages/bridge/dist/cli-bin.js init --name Kev  # once per machine: creates your identity in ~/.blether
 ```
 
 Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per session:
@@ -46,9 +47,9 @@ Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per 
 }
 ```
 
-The agent gets three tools: `send_message`, `read_mailbox` and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. An agent can be messaged once a session has acted as it at least once.
+The agent gets three tools: `send_message`, `read_mailbox` and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. An agent can be messaged once a session has acted as it at least once, and the first developer to act as an agent name owns it.
 
-Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes.
+Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from earlier dev builds can't be upgraded; move them aside.
 
 ### Push delivery in Claude Code (channels)
 

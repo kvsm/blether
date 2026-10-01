@@ -5,6 +5,7 @@ import {
   RelayError,
   createBridgeServer,
 } from "@blether/bridge";
+import { createIdentity, generateMachineKey } from "@blether/protocol";
 import { startRelay, type Relay } from "@blether/relay";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -20,6 +21,10 @@ const ChannelNotice = z.object({
 });
 type ChannelNotice = z.infer<typeof ChannelNotice>["params"];
 
+/** One developer owns every agent in these tests. */
+const machine = generateMachineKey();
+const credentials = { machine, identity: createIdentity(machine, "Kev") };
+
 /**
  * Connects to the relay as `agent`, retrying while the relay still holds the
  * agent for a session that has only just disconnected.
@@ -27,7 +32,7 @@ type ChannelNotice = z.infer<typeof ChannelNotice>["params"];
 async function connectAs(relay: Relay, agent: string) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await RelayConnection.connect(relay.url, agent);
+      return await RelayConnection.connect(relay.url, agent, credentials);
     } catch (error) {
       const inUse =
         error instanceof RelayError && error.code === "agent-in-use";

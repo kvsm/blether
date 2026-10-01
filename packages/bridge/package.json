@@ -2,7 +2,7 @@
   "name": "@blether/bridge",
   "version": "0.0.0",
   "private": true,
-  "description": "Local MCP server that connects an agent session to a Blether relay.",
+  "description": "The local side of Blether: the bridge (an MCP server connecting an agent session to a relay) and the blether CLI.",
   "type": "module",
   "exports": {
     ".": {
@@ -11,6 +11,7 @@
     }
   },
   "bin": {
+    "blether": "./dist/cli-bin.js",
     "blether-bridge": "./dist/bin.js"
   },
   "files": [

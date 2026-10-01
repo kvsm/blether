@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   RelayFrame,
   parseFrame,
+  signChallenge,
   type AgentName,
   type ClientFrame,
   type DeliveryStatus,
@@ -10,6 +11,7 @@ import {
   type SentMessage,
 } from "@blether/protocol";
 import { WebSocket } from "ws";
+import type { Credentials } from "./keystore.js";
 
 /** The relay refused something the bridge asked for. */
 export class RelayError extends Error {
@@ -43,7 +45,10 @@ export class RelayConnection {
   private readonly seen = new Set<string>();
   private readonly sends = new Map<string, Pending<SendReceipt>>();
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
-  private welcome: Pending<void> | undefined;
+  private challenge: Pending<string> | undefined;
+  private welcome: Pending<string> | undefined;
+  /** The authenticated developer's identity id, once the relay has welcomed this session. */
+  developer: string | undefined;
   private readonly arrivalListeners = new Set<(message: Message) => void>();
 
   private constructor(
@@ -53,6 +58,7 @@ export class RelayConnection {
     socket.on("message", (data) => this.receive(data.toString()));
     socket.on("close", () => {
       const error = new RelayError("disconnected", "Lost connection to relay.");
+      this.challenge?.reject(error);
       this.welcome?.reject(error);
       for (const pending of [...this.sends.values(), ...this.listings.values()])
         pending.reject(error);
@@ -62,28 +68,43 @@ export class RelayConnection {
   }
 
   /**
-   * Connects to the relay and starts acting as `agent`. Anything already
-   * waiting in the agent's mailbox is delivered straight away.
+   * Connects to the relay, authenticates as the developer in `credentials`,
+   * and starts acting as `agent`. Anything already waiting in the agent's
+   * mailbox is delivered straight away.
    */
   static async connect(
     url: string,
     agent: AgentName,
+    credentials: Credentials,
   ): Promise<RelayConnection> {
     const socket = new WebSocket(url);
-    await new Promise((resolve, reject) => {
-      socket.once("open", resolve);
-      socket.once("error", reject);
-    });
-
-    // Attach the handler before saying hello: the relay sends pending
-    // messages immediately after its welcome.
+    // Attach the frame handler at once: the relay sends its challenge as soon
+    // as the connection opens, and pending messages straight after welcome.
     const connection = new RelayConnection(socket, agent);
-    const welcomed = new Promise<void>((resolve, reject) => {
+    const challenged = new Promise<string>((resolve, reject) => {
+      connection.challenge = { resolve, reject };
+    });
+    const welcomed = new Promise<string>((resolve, reject) => {
       connection.welcome = { resolve, reject };
     });
-    connection.write({ type: "hello", agent });
+    // Avoid unhandled rejections if the socket fails before we await these.
+    challenged.catch(() => {});
+    welcomed.catch(() => {});
+
     try {
-      await welcomed;
+      await new Promise((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      const challenge = await challenged;
+      connection.write({
+        type: "hello",
+        agent,
+        identity: credentials.identity,
+        machine: credentials.machine.publicKey,
+        signature: signChallenge(credentials.machine, challenge, agent),
+      });
+      connection.developer = await welcomed;
     } catch (error) {
       socket.close();
       throw error;
@@ -160,8 +181,12 @@ export class RelayConnection {
     const frame = parseFrame(RelayFrame, data);
     if (!frame) return;
     switch (frame.type) {
+      case "challenge":
+        this.challenge?.resolve(frame.challenge);
+        this.challenge = undefined;
+        return;
       case "welcome":
-        this.welcome?.resolve();
+        this.welcome?.resolve(frame.developer);
         this.welcome = undefined;
         return;
       case "deliver":

@@ -2,12 +2,28 @@ import { DatabaseSync } from "node:sqlite";
 import type {
   AgentName,
   DeliveryStatus,
+  Identity,
+  IdentityLog,
   Message,
   SentMessage,
 } from "@blether/protocol";
 
+/** Bumped whenever the schema changes incompatibly. */
+const SCHEMA_VERSION = 2;
+
+export class IncompatibleDatabaseError extends Error {
+  constructor(path: string, version: number) {
+    super(
+      `${path} was created by an older relay (schema ${version}, need ${SCHEMA_VERSION}). ` +
+        "Dev-mode databases can't be migrated; move it aside and restart the relay.",
+    );
+    this.name = "IncompatibleDatabaseError";
+  }
+}
+
 /**
- * Durable storage for agents' mailboxes. A message's body is kept only until
+ * Durable storage for the relay: developers' identity logs, which developer
+ * owns each agent, and agents' mailboxes. A message's body is kept only until
  * the recipient reads it; after that the relay keeps just enough to report
  * its delivery status to the sender.
  */
@@ -17,10 +33,28 @@ export class MailboxStore {
   /** Opens (creating if needed) a store at `path`, or in memory for ":memory:". */
   constructor(path: string) {
     this.db = new DatabaseSync(path);
+    const { user_version: version } = this.db
+      .prepare("PRAGMA user_version")
+      .get() as { user_version: number };
+    const hasTables =
+      this.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table'")
+        .get() !== undefined;
+    if (hasTables && version !== SCHEMA_VERSION) {
+      this.db.close();
+      throw new IncompatibleDatabaseError(path, version);
+    }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA user_version = ${SCHEMA_VERSION};
+      CREATE TABLE IF NOT EXISTS developers (
+        id   TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        log  TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS agents (
-        name TEXT PRIMARY KEY
+        name  TEXT PRIMARY KEY,
+        owner TEXT NOT NULL REFERENCES developers (id)
       );
       CREATE TABLE IF NOT EXISTS messages (
         seq       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,18 +71,32 @@ export class MailboxStore {
     `);
   }
 
-  /** Records that a session has acted as `agent`, so others can message it. */
-  rememberAgent(agent: AgentName): void {
+  /** Stores a verified identity, replacing any older copy of its log. */
+  saveDeveloper(identity: Identity, log: IdentityLog): void {
     this.db
-      .prepare("INSERT OR IGNORE INTO agents (name) VALUES (?)")
-      .run(agent);
+      .prepare(
+        `INSERT INTO developers (id, name, log) VALUES (?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET name = excluded.name, log = excluded.log`,
+      )
+      .run(identity.id, identity.name, JSON.stringify(log));
   }
 
-  isKnownAgent(agent: AgentName): boolean {
-    return (
-      this.db.prepare("SELECT 1 FROM agents WHERE name = ?").get(agent) !==
-      undefined
-    );
+  /** The developer id that owns `agent`, if any session has acted as it. */
+  agentOwner(agent: AgentName): string | undefined {
+    const row = this.db
+      .prepare("SELECT owner FROM agents WHERE name = ?")
+      .get(agent) as { owner: string } | undefined;
+    return row?.owner;
+  }
+
+  /**
+   * Records that `owner` owns `agent`, so others can message it. Until agents
+   * are created deliberately (#8), the first developer to act as a name owns it.
+   */
+  claimAgent(agent: AgentName, owner: string): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO agents (name, owner) VALUES (?, ?)")
+      .run(agent, owner);
   }
 
   /**

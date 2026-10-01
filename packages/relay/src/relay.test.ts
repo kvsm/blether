@@ -2,12 +2,45 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RelayFrame, parseFrame } from "@blether/protocol";
+import {
+  RelayFrame,
+  createIdentity,
+  generateMachineKey,
+  parseFrame,
+  signChallenge,
+  verifyIdentityLog,
+  type IdentityLog,
+  type MachineKey,
+} from "@blether/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { startRelay, type Relay } from "./relay.js";
 
 type FrameOf<T extends RelayFrame["type"]> = Extract<RelayFrame, { type: T }>;
+
+interface Developer {
+  machine: MachineKey;
+  identity: IdentityLog;
+}
+
+function newDeveloper(name: string): Developer {
+  const machine = generateMachineKey();
+  return { machine, identity: createIdentity(machine, name) };
+}
+
+/** The developer every test client acts for unless told otherwise. */
+const alice = newDeveloper("Alice");
+const bob = newDeveloper("Bob");
+
+function helloFrame(agent: string, challenge: string, as: Developer) {
+  return {
+    type: "hello",
+    agent,
+    identity: as.identity,
+    machine: as.machine.publicKey,
+    signature: signChallenge(as.machine, challenge, agent),
+  };
+}
 
 /** A raw WebSocket client that queues every frame the relay sends it. */
 class TestClient {
@@ -25,11 +58,13 @@ class TestClient {
 
   static async connect(url: string): Promise<TestClient> {
     const socket = new WebSocket(url);
+    // Listen before the socket opens: the relay sends its challenge at once.
+    const client = new TestClient(socket);
     await new Promise((resolve, reject) => {
       socket.once("open", resolve);
       socket.once("error", reject);
     });
-    return new TestClient(socket);
+    return client;
   }
 
   send(frame: Record<string, unknown>) {
@@ -47,9 +82,19 @@ class TestClient {
     }
   }
 
-  async hello(agent: string) {
-    this.send({ type: "hello", agent });
-    return this.next("welcome");
+  /** Answers the relay's challenge as `agent` and returns its reply: welcome or error. */
+  async sayHello(agent: string, as: Developer = alice) {
+    const { challenge } = await this.next("challenge");
+    this.send(helloFrame(agent, challenge, as));
+    return this.next();
+  }
+
+  async hello(agent: string, as: Developer = alice) {
+    const reply = await this.sayHello(agent, as);
+    if (reply.type !== "welcome") {
+      throw new Error(`expected welcome, got ${JSON.stringify(reply)}`);
+    }
+    return reply;
   }
 
   /** Sends a message and waits for the relay to accept it. */
@@ -88,8 +133,7 @@ describe("relay", () => {
   const connectAs = async (agent: string) => {
     for (let attempt = 0; ; attempt++) {
       const client = await connect();
-      client.send({ type: "hello", agent });
-      const reply = await client.next();
+      const reply = await client.sayHello(agent);
       if (reply.type === "welcome") return client;
       await client.close();
       if (attempt === 50) throw new Error(`could not connect as ${agent}`);
@@ -112,6 +156,85 @@ describe("relay", () => {
     await relay.close();
   });
 
+  describe("authentication", () => {
+    it("welcomes a session that signs the challenge with its developer's machine", async () => {
+      const web = await connect();
+
+      expect(await web.hello("web")).toEqual({
+        type: "welcome",
+        agent: "web",
+        developer: verifyIdentityLog(alice.identity).id,
+      });
+    });
+
+    it("refuses a signature of a different challenge", async () => {
+      const web = await connect();
+      await web.next("challenge");
+      web.send(helloFrame("web", "x".repeat(43), alice));
+
+      expect(await web.next("error")).toMatchObject({
+        code: "authentication-failed",
+      });
+    });
+
+    it("refuses a signature made for a different agent", async () => {
+      const web = await connect();
+      const { challenge } = await web.next("challenge");
+      web.send({ ...helloFrame("web", challenge, alice), agent: "api" });
+
+      expect(await web.next("error")).toMatchObject({
+        code: "authentication-failed",
+      });
+    });
+
+    it("refuses a machine that isn't in the identity it presents", async () => {
+      const intruder = generateMachineKey();
+      const web = await connect();
+
+      expect(
+        await web.sayHello("web", {
+          machine: intruder,
+          identity: alice.identity,
+        }),
+      ).toMatchObject({ code: "authentication-failed" });
+    });
+
+    it("refuses a tampered identity log", async () => {
+      const forged = structuredClone(alice.identity);
+      forged[0]!.entry.name = "Mallory";
+      const web = await connect();
+
+      expect(
+        await web.sayHello("web", { machine: alice.machine, identity: forged }),
+      ).toMatchObject({ code: "authentication-failed" });
+    });
+
+    it("refuses an unauthenticated hello", async () => {
+      const web = await connect();
+      await web.next("challenge");
+      web.send({ type: "hello", agent: "web" });
+
+      expect(await web.next("error")).toMatchObject({
+        code: "malformed-frame",
+      });
+    });
+
+    it("refuses to let another developer act as an agent someone already owns", async () => {
+      await introduce("api");
+      const impostor = await connect();
+
+      expect(await impostor.sayHello("api", bob)).toMatchObject({
+        code: "agent-owned-by-another",
+      });
+    });
+
+    it("lets the owner act as their agent again", async () => {
+      await introduce("api");
+
+      await expect(connectAs("api")).resolves.toBeInstanceOf(TestClient);
+    });
+  });
+
   describe("sessions", () => {
     it("refuses to send before hello", async () => {
       const web = await connect();
@@ -127,7 +250,7 @@ describe("relay", () => {
     it("refuses a second hello on the same connection", async () => {
       const web = await connect();
       await web.hello("web");
-      web.send({ type: "hello", agent: "api" });
+      web.send(helloFrame("api", "stale-challenge", alice));
 
       expect(await web.next("error")).toMatchObject({
         code: "already-introduced",
@@ -139,9 +262,7 @@ describe("relay", () => {
       const second = await connect();
       await first.hello("api");
 
-      second.send({ type: "hello", agent: "api" });
-
-      expect(await second.next("error")).toMatchObject({
+      expect(await second.sayHello("api")).toMatchObject({
         code: "agent-in-use",
       });
     });
@@ -289,7 +410,7 @@ describe("relay", () => {
       const { id } = await web.message("api", "for api only");
 
       const intruder = await connect();
-      await intruder.hello("ops");
+      await intruder.hello("ops", bob);
       intruder.send({ type: "read", ids: [id] });
 
       await expect
