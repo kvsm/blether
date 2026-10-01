@@ -1,4 +1,11 @@
-import { AgentName, type Audience, type SentMessage } from "@blether/protocol";
+import {
+  AgentName,
+  Attachment,
+  MAX_ATTACHMENTS,
+  MAX_MESSAGE_CHARS,
+  type Audience,
+  type SentMessage,
+} from "@blether/protocol";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   SubscribeRequestSchema,
@@ -249,9 +256,23 @@ export function createBridgeServer(
             "The id of the message this replies to: one you've read, or one you sent",
           ),
         body: z.string().min(1).describe("The message text"),
+        attachments: z
+          .array(Attachment)
+          .max(MAX_ATTACHMENTS)
+          .optional()
+          .describe(
+            `Up to ${MAX_ATTACHMENTS} code snippets, diffs or links to go with the message. Keep them small: the whole message is limited to ${MAX_MESSAGE_CHARS} characters.`,
+          ),
       },
     },
-    async ({ to, role, everyone, reply_to, body }) => {
+    async ({ to, role, everyone, reply_to, body, attachments }) => {
+      const size = messageSize(body, attachments);
+      if (size > MAX_MESSAGE_CHARS) {
+        return respond(
+          `Not sent: the message and its attachments are ${size} characters, over the limit of ${MAX_MESSAGE_CHARS}. Trim them, or point to where the full text lives (a commit, a PR, a file path) instead.`,
+          true,
+        );
+      }
       const targets = [to !== undefined, role !== undefined, everyone === true];
       const parent = reply_to ? findParent(reply_to) : undefined;
       if (reply_to && !parent) {
@@ -293,7 +314,7 @@ export function createBridgeServer(
               ? `every agent with the ${target.role} role (${recipients.join(", ")})`
               : `everyone in the team (${recipients.join(", ")})`;
         const warnings = [
-          ...secretWarning(await scanSecrets(body)),
+          ...secretWarning(await scanSecrets(scannableText(body, attachments))),
           ...limitWarning(limiter.checkAll(recipients, thread)),
         ];
         const approval = await askToSend(
@@ -313,12 +334,14 @@ export function createBridgeServer(
             audience,
             inReplyTo,
             thread,
+            attachments,
           });
           limiter.record(recipient, thread);
           sentLog?.add({
             id: receipt.id,
             to: recipient,
             body,
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
             thread: thread ?? receipt.id,
             sentAt: now().toISOString(),
           });
@@ -694,7 +717,45 @@ function formatItem(item: MailboxItem, sentLog?: SentLog): string {
     `<message id="${item.id}" from="${item.from}"${audience}${threading} sent_at="${item.sentAt}">`,
     ...quote,
     item.body,
+    ...(item.attachments ?? []).map(formatAttachment),
     "</message>",
+  ].join("\n");
+}
+
+function formatAttachment(attachment: Attachment): string {
+  const title = attachment.title ? ` title="${attachment.title}"` : "";
+  switch (attachment.kind) {
+    case "link":
+      return `<attachment kind="link"${title}>${attachment.url}</attachment>`;
+    case "diff":
+      return `<attachment kind="diff"${title}>\n${attachment.content}\n</attachment>`;
+    case "snippet": {
+      const language = attachment.language
+        ? ` language="${attachment.language}"`
+        : "";
+      return `<attachment kind="snippet"${title}${language}>\n${attachment.content}\n</attachment>`;
+    }
+  }
+}
+
+/** Characters in a message's body and attachments together, as counted against the limit. */
+function messageSize(body: string, attachments: Attachment[] | undefined) {
+  return (attachments ?? []).reduce(
+    (total, a) =>
+      total +
+      (a.title?.length ?? 0) +
+      (a.kind === "link" ? a.url.length : a.content.length),
+    body.length,
+  );
+}
+
+/** Everything in a message the secret check should see: the body, every attachment's content, and link URLs. */
+function scannableText(body: string, attachments: Attachment[] | undefined) {
+  return [
+    body,
+    ...(attachments ?? []).map((a) =>
+      [a.title ?? "", a.kind === "link" ? a.url : a.content].join("\n"),
+    ),
   ].join("\n");
 }
 

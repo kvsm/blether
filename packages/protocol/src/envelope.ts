@@ -39,6 +39,33 @@ export const Audience = z.discriminatedUnion("kind", [
 ]);
 export type Audience = z.infer<typeof Audience>;
 
+/** Something attached to a message: a code snippet, a diff, or a link. */
+export const Attachment = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snippet"),
+    title: z.string().max(200).optional(),
+    /** The snippet's language, e.g. "ts", for display. */
+    language: z.string().max(40).optional(),
+    content: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("diff"),
+    title: z.string().max(200).optional(),
+    content: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("link"),
+    title: z.string().max(200).optional(),
+    url: z.url(),
+  }),
+]);
+export type Attachment = z.infer<typeof Attachment>;
+
+/** Most attachments one message may carry. */
+export const MAX_ATTACHMENTS = 10;
+/** Most characters a message's body and attachments may hold together. */
+export const MAX_MESSAGE_CHARS = 32_000;
+
 /** A message's content and addressing, as signed by the sender. */
 export const MessagePayload = z.object({
   id: z.uuid(),
@@ -58,6 +85,7 @@ export const MessagePayload = z.object({
   /** The thread it belongs to: the id of the message that started it. Absent for a message that starts one. */
   thread: z.uuid().optional(),
   body: z.string().min(1),
+  attachments: z.array(Attachment).max(MAX_ATTACHMENTS).optional(),
   /** When the sender sent it, by the sender's clock. */
   sentAt: z.iso.datetime(),
 });

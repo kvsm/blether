@@ -6,6 +6,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { Attachment } from "@blether/protocol";
 import { z } from "zod";
 
 /**
@@ -17,6 +18,7 @@ export const SentRecord = z.object({
   id: z.uuid(),
   to: z.string(),
   body: z.string(),
+  attachments: z.array(Attachment).optional(),
   thread: z.uuid(),
   sentAt: z.iso.datetime(),
 });
