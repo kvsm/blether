@@ -5,6 +5,7 @@ export {
   type ConnectOptions,
   type MailboxItem,
   type ReceivedMessage,
+  type SendTarget,
   type UnreadableMessage,
   type VerifiedTeam,
 } from "./relay-connection.js";

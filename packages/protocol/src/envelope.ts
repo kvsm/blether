@@ -9,7 +9,7 @@ import {
   verify,
   type DeviceKey,
 } from "./crypto.js";
-import { AgentName } from "./names.js";
+import { AgentName, RoleName } from "./names.js";
 
 /**
  * End-to-end encrypted messages (ADR 0005).
@@ -27,12 +27,26 @@ export const ENVELOPE_VERSION = 1;
 
 const SIGNING_CONTEXT = "blether-message-v1";
 
+/**
+ * Who a message was addressed to, when it went to more than one agent. Each
+ * recipient still gets their own copy, addressed to them in `to`.
+ */
+export const Audience = z.discriminatedUnion("kind", [
+  /** Every agent holding the role. */
+  z.object({ kind: z.literal("role"), role: RoleName }),
+  /** Every other agent in the team (a broadcast). */
+  z.object({ kind: z.literal("everyone") }),
+]);
+export type Audience = z.infer<typeof Audience>;
+
 /** A message's content and addressing, as signed by the sender. */
 export const MessagePayload = z.object({
   id: z.uuid(),
   team: z.string(),
   from: AgentName,
   to: AgentName,
+  /** Set when the message went to a role or the whole team. */
+  audience: Audience.optional(),
   body: z.string().min(1),
   /** When the sender sent it, by the sender's clock. */
   sentAt: z.iso.datetime(),
