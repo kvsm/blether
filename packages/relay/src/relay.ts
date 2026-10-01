@@ -71,6 +71,18 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const sessions = new Map<string, WebSocket>();
   /** The developer behind each agent session, by session key. */
   const sessionOwners = new Map<string, string>();
+  /** The device each agent session authenticated with, by session key. */
+  const sessionDevices = new Map<string, string>();
+
+  /** Closes a developer's sessions on devices their identity no longer includes (revoked ones). */
+  const closeRevokedSessions = (identity: Identity) => {
+    for (const [key, socket] of sessions) {
+      if (sessionOwners.get(key) !== identity.id) continue;
+      if (!identity.devices.includes(sessionDevices.get(key) ?? "")) {
+        socket.close(4001, "This device has been revoked.");
+      }
+    }
+  };
 
   /** Sends an agent session the lost-message notices it hasn't acknowledged. */
   const sendLost = (socket: WebSocket, team: string, agent: AgentName) => {
@@ -204,6 +216,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           return;
         }
         store.saveDeveloper(identity, identityLog);
+        closeRevokedSessions(identity);
 
         if (frame.team && frame.agent) {
           const requested = { team: frame.team, agent: frame.agent };
@@ -242,6 +255,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           scope = requested;
           sessions.set(sessionKey(scope), socket);
           sessionOwners.set(sessionKey(scope), identity.id);
+          sessionDevices.set(sessionKey(scope), frame.device);
         }
 
         developer = identity;
@@ -471,6 +485,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
       if (scope && sessions.get(sessionKey(scope)) === socket) {
         sessions.delete(sessionKey(scope));
         sessionOwners.delete(sessionKey(scope));
+        sessionDevices.delete(sessionKey(scope));
       }
     });
   });
