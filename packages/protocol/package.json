@@ -1,0 +1,16 @@
+{
+  "name": "@blether/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Message and envelope types shared by the Blether bridge and relay.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ]
+}

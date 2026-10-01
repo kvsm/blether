@@ -2,15 +2,15 @@
 
 - **Accessed:** 2026-10-01. Everything below reflects the sources as they read on that date. This area changes month to month, so check again before relying on any detail.
 - **Versions examined:** A2A spec 1.0.0 (repo release v1.0.1), MCP revision `2026-07-28` (current), Agent Client Protocol (Zed) protocol version `1`, ANP 1.2, SLIM Internet-Draft `draft-mpsb-agntcy-slim-02`, and the Claude Code docs at code.claude.com (features up to about v2.1.28x).
-- **Sources:** primary only (specs, official docs, source repos, first-party announcements). Statements marked *Analysis* are this document's own reasoning, not a source's claim. Statements marked *Unverified* could not be confirmed from a primary source.
+- **Sources:** primary only (specs, official docs, source repos, first-party announcements). Statements marked _Analysis_ are this document's own reasoning, not a source's claim. Statements marked _Unverified_ could not be confirmed from a primary source.
 
 ## TL;DR
 
 - **The constraint that decides everything:** developer laptops cannot accept inbound connections. Every protocol here except MCP-over-stdio assumes the receiving agent is a reachable HTTP(S) server. Blether therefore needs a **relay or broker** whatever protocol it picks.
-- **No coding agent today speaks a common agent-to-agent protocol as a receiver.** Gemini CLI is an A2A *client* (experimental), and its A2A *server* package is experimental. Claude Code, Codex CLI, Copilot and Cursor have no native A2A. All of them are **MCP clients**.
+- **No coding agent today speaks a common agent-to-agent protocol as a receiver.** Gemini CLI is an A2A _client_ (experimental), and its A2A _server_ package is experimental. Claude Code, Codex CLI, Copilot and Cursor have no native A2A. All of them are **MCP clients**.
 - **Recommendation:** a hybrid design.
   - **Agent edge:** MCP. Each developer runs a local Blether MCP server (the "bridge"). It dials out to a Blether relay.
-  - **Push into the session:** where the host supports it (Claude Code *channels*), the bridge pushes incoming messages into the live session. Otherwise agents poll a tool.
+  - **Push into the session:** where the host supports it (Claude Code _channels_), the bridge pushes incoming messages into the live session. Otherwise agents poll a tool.
   - **Between relays and to external agents:** A2A. The relay hosts A2A Agent Cards and endpoints on behalf of participants.
   - Details and trade-offs are in [Recommendation](#recommendation-for-blether).
 
@@ -37,9 +37,9 @@
   - Streaming over SSE, with `SubscribeToTask` to re-attach.
   - Push notifications: webhooks, which are server-initiated HTTP POSTs to a client-registered HTTPS URL. These need the client to be reachable.
 - **NAT and firewalls:**
-  - An A2A *client* on a laptop works fine, because it only makes outbound calls and can poll or stream.
-  - An A2A *server* (an agent that can be messaged) must be reachable over HTTP(S), and webhook receivers must be reachable too.
-  - *Analysis:* a laptop agent can't be an A2A server without a relay, tunnel or proxy that terminates A2A on its behalf.
+  - An A2A _client_ on a laptop works fine, because it only makes outbound calls and can poll or stream.
+  - An A2A _server_ (an agent that can be messaged) must be reachable over HTTP(S), and webhook receivers must be reachable too.
+  - _Analysis:_ a laptop agent can't be an A2A server without a relay, tunnel or proxy that terminates A2A on its behalf.
 - **Auth:**
   - Agent Cards declare security schemes: API key, HTTP auth, OAuth 2.0, OIDC and mTLS ([spec §7](https://a2a-protocol.org/latest/specification/)).
   - Webhook security guidance recommends signed notifications (JWT + JWKS) and SSRF validation of webhook URLs ([streaming & async](https://a2a-protocol.org/latest/topics/streaming-and-async/)).
@@ -47,7 +47,7 @@
   - Gemini CLI is an A2A **client** through "remote subagents" (Markdown/YAML definitions pointing at an Agent Card, with apiKey/http/google-credentials/oauth auth). The feature is experimental ([Gemini CLI docs](https://geminicli.com/docs/core/remote-agents/)).
   - Gemini CLI ships an `a2a-server` package: "All code in this package is experimental" ([repo](https://github.com/google-gemini/gemini-cli/tree/main/packages/a2a-server)).
   - Claude Code: no native support found. Cross-machine A2A is an open feature request ([anthropics/claude-code#28300](https://github.com/anthropics/claude-code/issues/28300), opened 2026-02-24).
-  - Codex CLI, Copilot and Cursor: no native support found in their docs (*Unverified* as a negative).
+  - Codex CLI, Copilot and Cursor: no native support found in their docs (_Unverified_ as a negative).
   - Microsoft's Agent Framework can wrap Copilot SDK agents and offers A2A ([MS devblog](https://devblogs.microsoft.com/agent-framework/build-ai-agents-with-github-copilot-sdk-and-microsoft-agent-framework/)). That is a framework, not Copilot CLI or IDE support.
 
 ## 2. MCP (Model Context Protocol)
@@ -65,12 +65,12 @@
   - Claude Code additionally supports a WebSocket transport (`type: "ws"`), which "suits remote MCP servers that push events to Claude unprompted" ([Claude Code MCP docs](https://code.claude.com/docs/en/mcp)). This is a host extension, not part of the MCP spec.
 - **Can MCP do agent-to-agent?** Not directly: MCP is client↔server, and agents are clients. A **shared MCP server used as a mailbox** does work, though, and fits the NAT constraint well, because every agent dials out. Relevant features:
   - **Tools:** `send_message`, `read_inbox`, `claim_task` and so on. Universally supported.
-  - **Resources + `subscriptions/listen`:** a client can subscribe to resource URIs (for example `blether://inbox/alice`) and receive `notifications/resources/updated` ([subscriptions](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions)). The notification only says "URI changed". Whether a host then wakes the model or injects the content is up to the host. *Unverified* for every coding agent. Claude Code's MCP docs do not mention resource subscriptions (they cover `list_changed` only, [docs](https://code.claude.com/docs/en/mcp)).
-  - **Tasks extension:** a server returns a durable `taskId`. The client polls `tasks/get`, supplies mid-flight input via `tasks/update`, and can get `notifications/tasks` via `subscriptions/listen`. "Polling is the default" ([Tasks](https://modelcontextprotocol.io/extensions/tasks/overview)). This models *client→server* long-running work, not peer messaging. Coding-agent support is not shown in the official [client matrix](https://modelcontextprotocol.io/extensions/client-matrix) (*Unverified*).
-  - **Elicitation:** under MRTR it can only happen *inside* a client-initiated request. It is useful for "approve sending this?" prompts during a `send_message` tool call. A server cannot use it to interrupt an idle agent.
+  - **Resources + `subscriptions/listen`:** a client can subscribe to resource URIs (for example `blether://inbox/alice`) and receive `notifications/resources/updated` ([subscriptions](https://modelcontextprotocol.io/specification/2026-07-28/basic/patterns/subscriptions)). The notification only says "URI changed". Whether a host then wakes the model or injects the content is up to the host. _Unverified_ for every coding agent. Claude Code's MCP docs do not mention resource subscriptions (they cover `list_changed` only, [docs](https://code.claude.com/docs/en/mcp)).
+  - **Tasks extension:** a server returns a durable `taskId`. The client polls `tasks/get`, supplies mid-flight input via `tasks/update`, and can get `notifications/tasks` via `subscriptions/listen`. "Polling is the default" ([Tasks](https://modelcontextprotocol.io/extensions/tasks/overview)). This models _client→server_ long-running work, not peer messaging. Coding-agent support is not shown in the official [client matrix](https://modelcontextprotocol.io/extensions/client-matrix) (_Unverified_).
+  - **Elicitation:** under MRTR it can only happen _inside_ a client-initiated request. It is useful for "approve sending this?" prompts during a `send_message` tool call. A server cannot use it to interrupt an idle agent.
   - **Sampling:** deprecated. Don't build on it.
   - **Notifications:** request-scoped progress, plus `list_changed` and resource updates on the listen stream. There is no standard "deliver a message to the model" notification.
-- **Discovery and identity:** `server/discover` returns versions, capabilities and identity. There is no peer discovery: an MCP server *is* the rendezvous point.
+- **Discovery and identity:** `server/discover` returns versions, capabilities and identity. There is no peer discovery: an MCP server _is_ the rendezvous point.
 - **Auth:**
   - OAuth 2.1-based authorization for HTTP.
   - 2026-07-28 deprecates Dynamic Client Registration in favour of Client ID Metadata Documents, and adds RFC 9207 `iss` validation ([changelog](https://modelcontextprotocol.io/specification/2026-07-28/changelog)).
@@ -81,13 +81,13 @@
   - Codex CLI: stdio and Streamable HTTP with OAuth ([docs](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)). `codex mcp-server` "has been removed" in favour of the Codex app server's own JSON-RPC protocol ([docs](https://learn.chatgpt.com/docs/mcp-server)).
   - Gemini CLI: stdio, SSE, Streamable HTTP, tools, prompts, resources ([docs](https://geminicli.com/docs/tools/mcp-server/)).
   - Cursor: stdio, SSE, Streamable HTTP; tools, prompts, resources, roots, elicitation, Apps ([docs](https://cursor.com/docs/context/mcp)).
-  - VS Code / Copilot: full-spec support announced June 2025, including sampling and elicitation ([VS Code blog](https://code.visualstudio.com/blogs/2025/06/12/full-mcp-spec-support)). Its support for the 2026-07-28 revision is *Unverified*.
+  - VS Code / Copilot: full-spec support announced June 2025, including sampling and elicitation ([VS Code blog](https://code.visualstudio.com/blogs/2025/06/12/full-mcp-spec-support)). Its support for the 2026-07-28 revision is _Unverified_.
 
 ### Claude Code "channels": push into a live session over MCP
 
 This is the most important finding for Blether's edge.
 
-- A *channel* is an MCP server that declares the experimental capability `claude/channel` and emits `notifications/claude/channel` (`content` plus `meta`). Claude Code injects each event into the running session as a `<channel source="…">` block. If the session is idle, the event starts a turn. Events that arrive while Claude is busy are batched into the next turn ([channels reference](https://code.claude.com/docs/en/channels-reference)).
+- A _channel_ is an MCP server that declares the experimental capability `claude/channel` and emits `notifications/claude/channel` (`content` plus `meta`). Claude Code injects each event into the running session as a `<channel source="…">` block. If the session is idle, the event starts a turn. Events that arrive while Claude is busy are batched into the next turn ([channels reference](https://code.claude.com/docs/en/channels-reference)).
 - **Two-way:** the server exposes a normal `reply` tool.
 - **Permission relay:** the optional `claude/channel/permission` capability forwards tool-approval prompts (`…/permission_request`) and accepts `allow`/`deny` verdicts ([same](https://code.claude.com/docs/en/channels-reference)).
 - **Limits:**
@@ -119,7 +119,7 @@ This is the most important finding for Blether's edge.
 - **Design:**
   - Layered. Identity uses W3C DIDs (`did:wba`, `did:web`) over HTTP/TLS.
   - Agent description and discovery documents, a meta-protocol for negotiating application protocols, and nine messaging profiles (direct, group, E2EE, attachments, federation) ([site](https://agent-network-protocol.com/)).
-- **NAT:** the repo references federation and relay concepts in the messaging layer, but the details weren't verified (*Unverified*). Agents are web-hosted by design (`did:wba` resolves via HTTPS).
+- **NAT:** the repo references federation and relay concepts in the messaging layer, but the details weren't verified (_Unverified_). Agents are web-hosted by design (`did:wba` resolves via HTTPS).
 - **Coding agents:** none found with native support.
 - **For Blether:** interesting decentralised identity ideas, but low adoption and no coding-agent support. Not a candidate.
 
@@ -129,16 +129,16 @@ This is the most important finding for Blether's edge.
 - **Components** ([docs](https://docs.agntcy.org/)): Agent Directory Service (federated registry), OASF (schema), Identity (decentralised IDs and verifiable credentials), **SLIM**, SHADI (hardened runtime), Observability.
 - **AGNTCY ACP (Agent Connect Protocol):**
   - A REST/OpenAPI interface to invoke and configure remote agents. The repo was **archived 2026-04-11** ([acp-spec](https://github.com/agntcy/acp-spec)), and ACP no longer appears in the component list ([docs](https://docs.agntcy.org/)).
-  - Secondary sources say AGNTCY now points to A2A for invocation. *Unverified* from a primary source.
+  - Secondary sources say AGNTCY now points to A2A for invocation. _Unverified_ from a primary source.
 - **SLIM (Secure Low-Latency Interactive Messaging):**
   - Runs gRPC over HTTP/2 and HTTP/3.
   - Routing nodes forward messages by hierarchical name. Clients carry the session layer.
   - Supports pub/sub and request/reply, with MLS end-to-end encryption over TLS 1.3 hop-by-hop, and SLIMRPC.
   - Integration packages: `slim-a2a-python` and `slim-mcp-python` ([repo](https://github.com/agntcy/slim)).
   - Specified as an **individual** IETF Internet-Draft, `draft-mpsb-agntcy-slim-02` (2026-07-07), "no formal standing" ([datatracker](https://datatracker.ietf.org/doc/draft-mpsb-agntcy-slim/)).
-  - *Analysis:* clients connect to routing nodes, so this is broker-style and NAT-friendly. That is an inference from the architecture; NAT traversal isn't stated explicitly.
+  - _Analysis:_ clients connect to routing nodes, so this is broker-style and NAT-friendly. That is an inference from the architecture; NAT traversal isn't stated explicitly.
 - **Coding agents:** none found with native support.
-- **For Blether:** SLIM is a plausible relay fabric to *borrow*, especially MLS group E2EE. It is a heavy dependency with pre-standard status, though.
+- **For Blether:** SLIM is a plausible relay fabric to _borrow_, especially MLS group E2EE. It is a heavy dependency with pre-standard status, though.
 
 ## 6. How Claude Code agent teams communicate
 
@@ -159,11 +159,11 @@ From [agent teams](https://code.claude.com/docs/en/agent-teams) and [cross-sessi
 - **Across machines?** Agent teams: **no.** "One team per session … You can't … share a team across sessions", and all state is in local files.
 - **Cross-session messaging** (v2.1.224+) is the nearest thing:
   - Same machine: a Unix socket or named pipe, "never through Anthropic servers".
-  - Another of *your* machines: "Through Anthropic servers", over Remote Control, with a claude.ai login. Messages to offline sessions queue until the machine reconnects.
+  - Another of _your_ machines: "Through Anthropic servers", over Remote Control, with a claude.ai login. Messages to offline sessions queue until the machine reconnects.
   - Inbound control is `accept`/`hold`/`refuse`, and `isolatePeerMachines` requires approval before a message leaves the machine.
   - It is plain text only, capped at about 1M characters, rate-limited and loop-throttled.
   - Only messaging between **your own sessions** is documented. Nothing covers different developers or accounts.
-- **Lessons for Blether** (*Analysis*):
+- **Lessons for Blether** (_Analysis_):
   - The UX to copy: name-addressed inboxes, delivery at turn boundaries, idle wake-up, a shared task list with atomic claims, and "messages are never consent".
   - The inbound `accept`/`hold`/`refuse` policy maps directly onto Blether's "how much may my agent say or do without approval".
   - The transport is local-only, apart from Anthropic's Remote Control relay, which is limited to one user.
@@ -176,8 +176,8 @@ From [agent teams](https://code.claude.com/docs/en/agent-teams) and [cross-sessi
 - **Governance:** Apache-2.0, with GOVERNANCE.md and MAINTAINERS.md in the repo. Stable protocol version `1` ([repo](https://github.com/agentclientprotocol/agent-client-protocol)).
 - **Agents with native support:** Gemini CLI (`gemini --acp`, [docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/acp-mode.md)), GitHub Copilot CLI (`copilot --acp`, stdio or TCP on loopback, public preview from 2026-01-28, [docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server), [changelog](https://github.blog/changelog/2026-01-28-acp-support-in-copilot-cli-is-now-in-public-preview/)), Cursor, Goose, OpenCode and others ([agents list](https://agentclientprotocol.com/get-started/agents)).
 - **Agents via adapter:** Claude (Zed's SDK adapter) and Codex CLI ([agents list](https://agentclientprotocol.com/get-started/agents)).
-- **How it differs:** it is not agent-to-agent. The *client* (an editor) owns the agent process and sends it prompts.
-- *Analysis:* a Blether daemon could act as an ACP client and inject prompts into any ACP agent, which gives universal "push". The catch is that the daemon must own the session, which conflicts with "the developer's live session in their own terminal".
+- **How it differs:** it is not agent-to-agent. The _client_ (an editor) owns the agent process and sends it prompts.
+- _Analysis:_ a Blether daemon could act as an ACP client and inject prompts into any ACP agent, which gives universal "push". The catch is that the daemon must own the session, which conflicts with "the developer's live session in their own terminal".
 
 ### Codex app server
 
@@ -188,29 +188,29 @@ From [agent teams](https://code.claude.com/docs/en/agent-teams) and [cross-sessi
 
 ## Coding-agent support matrix
 
-| Agent | MCP client | Push into live session from MCP | A2A | Agent Client Protocol (Zed) |
-|---|---|---|---|---|
-| Claude Code | Yes: stdio, HTTP, WS ([docs](https://code.claude.com/docs/en/mcp)) | **Yes, via channels** (research preview, Claude-only) | No ([feature request](https://github.com/anthropics/claude-code/issues/28300)) | Via Zed adapter |
-| Codex CLI | Yes: stdio, HTTP ([docs](https://learn.chatgpt.com/docs/extend/mcp?surface=cli)) | Not documented | Not found | Via adapter |
-| Gemini CLI | Yes: stdio, SSE, HTTP ([docs](https://geminicli.com/docs/tools/mcp-server/)) | Not documented | **Client** (experimental); server package experimental | Native (`--acp`) |
-| GitHub Copilot (CLI / VS Code) | Yes ([VS Code](https://code.visualstudio.com/blogs/2025/06/12/full-mcp-spec-support)) | Not documented | Only via MS Agent Framework | Native in CLI (preview) |
-| Cursor | Yes: stdio, SSE, HTTP, elicitation ([docs](https://cursor.com/docs/context/mcp)) | Not documented | Not found | Native ([list](https://agentclientprotocol.com/get-started/agents)) |
+| Agent                          | MCP client                                                                            | Push into live session from MCP                       | A2A                                                                            | Agent Client Protocol (Zed)                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Claude Code                    | Yes: stdio, HTTP, WS ([docs](https://code.claude.com/docs/en/mcp))                    | **Yes, via channels** (research preview, Claude-only) | No ([feature request](https://github.com/anthropics/claude-code/issues/28300)) | Via Zed adapter                                                     |
+| Codex CLI                      | Yes: stdio, HTTP ([docs](https://learn.chatgpt.com/docs/extend/mcp?surface=cli))      | Not documented                                        | Not found                                                                      | Via adapter                                                         |
+| Gemini CLI                     | Yes: stdio, SSE, HTTP ([docs](https://geminicli.com/docs/tools/mcp-server/))          | Not documented                                        | **Client** (experimental); server package experimental                         | Native (`--acp`)                                                    |
+| GitHub Copilot (CLI / VS Code) | Yes ([VS Code](https://code.visualstudio.com/blogs/2025/06/12/full-mcp-spec-support)) | Not documented                                        | Only via MS Agent Framework                                                    | Native in CLI (preview)                                             |
+| Cursor                         | Yes: stdio, SSE, HTTP, elicitation ([docs](https://cursor.com/docs/context/mcp))      | Not documented                                        | Not found                                                                      | Native ([list](https://agentclientprotocol.com/get-started/agents)) |
 
 "Not documented" and "Not found" mean no primary source was found. They don't prove the feature is absent.
 
 ## Comparison table
 
-| | A2A | MCP | IBM ACP | ANP | AGNTCY SLIM | Zed ACP | Claude Code teams / cross-session |
-|---|---|---|---|---|---|---|---|
-| **Purpose** | Agent ↔ agent | Agent ↔ tools/data | Agent ↔ agent | Agent ↔ agent (open web) | Messaging transport | Editor ↔ agent | Claude ↔ Claude |
-| **Maturity** | 1.0.x, LF, wide enterprise adoption | `2026-07-28`, AAIF/LF, universal in coding agents | Archived (merged into A2A) | 1.2 with draft parts, W3C CG | Individual I-D -02 | v1, broad editor and agent adoption | Experimental / v2.1.224+ |
-| **Transport** | JSON-RPC, gRPC, REST + SSE | stdio, Streamable HTTP | REST | HTTPS (+ messaging profiles) | gRPC over HTTP/2 and HTTP/3 | stdio (remote WIP) | Local files / sockets; Anthropic relay |
-| **Discovery / identity** | Agent Card, well-known URI, signed cards; no standard registry | `server/discover`; no peer discovery | Agent Manifest | DIDs (`did:wba`) | Hierarchical names; AGNTCY Directory and Identity | n/a (client launches agent) | Team config file; `ListAgents` |
-| **Async / long-running** | Tasks with input-required and auth-required | Tasks extension (polling-first) | Async runs, Await | Profile-dependent | Pub/sub, streaming | Sessions | Mailbox + task list |
-| **Push vs. poll** | Poll, SSE stream, or webhook push | Poll; `subscriptions/listen` change notifications; host-specific push (channels) | Stream / poll | Unverified | Push over a client-held connection | Client drives | Push at turn boundaries |
-| **Reaches a NAT'd laptop?** | Client yes; **server/webhook no** without a relay | **Yes** (client dials out) | Server no | Server no | Yes via routing node (inferred) | Local only | Same machine; own machines via Anthropic |
-| **Auth** | API key, HTTP, OAuth2, OIDC, mTLS | OAuth 2.1, CIMD | n/a | DID-based | TLS + MLS | Local process | OS user, claude.ai account |
-| **Native in coding agents** | Gemini CLI (client) | All five | None | None | None | Gemini, Copilot CLI, Cursor (+ adapters) | Claude Code only |
+|                             | A2A                                                            | MCP                                                                              | IBM ACP                    | ANP                          | AGNTCY SLIM                                       | Zed ACP                                  | Claude Code teams / cross-session        |
+| --------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------- | ---------------------------- | ------------------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| **Purpose**                 | Agent ↔ agent                                                  | Agent ↔ tools/data                                                               | Agent ↔ agent              | Agent ↔ agent (open web)     | Messaging transport                               | Editor ↔ agent                           | Claude ↔ Claude                          |
+| **Maturity**                | 1.0.x, LF, wide enterprise adoption                            | `2026-07-28`, AAIF/LF, universal in coding agents                                | Archived (merged into A2A) | 1.2 with draft parts, W3C CG | Individual I-D -02                                | v1, broad editor and agent adoption      | Experimental / v2.1.224+                 |
+| **Transport**               | JSON-RPC, gRPC, REST + SSE                                     | stdio, Streamable HTTP                                                           | REST                       | HTTPS (+ messaging profiles) | gRPC over HTTP/2 and HTTP/3                       | stdio (remote WIP)                       | Local files / sockets; Anthropic relay   |
+| **Discovery / identity**    | Agent Card, well-known URI, signed cards; no standard registry | `server/discover`; no peer discovery                                             | Agent Manifest             | DIDs (`did:wba`)             | Hierarchical names; AGNTCY Directory and Identity | n/a (client launches agent)              | Team config file; `ListAgents`           |
+| **Async / long-running**    | Tasks with input-required and auth-required                    | Tasks extension (polling-first)                                                  | Async runs, Await          | Profile-dependent            | Pub/sub, streaming                                | Sessions                                 | Mailbox + task list                      |
+| **Push vs. poll**           | Poll, SSE stream, or webhook push                              | Poll; `subscriptions/listen` change notifications; host-specific push (channels) | Stream / poll              | Unverified                   | Push over a client-held connection                | Client drives                            | Push at turn boundaries                  |
+| **Reaches a NAT'd laptop?** | Client yes; **server/webhook no** without a relay              | **Yes** (client dials out)                                                       | Server no                  | Server no                    | Yes via routing node (inferred)                   | Local only                               | Same machine; own machines via Anthropic |
+| **Auth**                    | API key, HTTP, OAuth2, OIDC, mTLS                              | OAuth 2.1, CIMD                                                                  | n/a                        | DID-based                    | TLS + MLS                                         | Local process                            | OS user, claude.ai account               |
+| **Native in coding agents** | Gemini CLI (client)                                            | All five                                                                         | None                       | None                         | None                                              | Gemini, Copilot CLI, Cursor (+ adapters) | Claude Code only                         |
 
 ---
 
@@ -242,21 +242,21 @@ From [agent teams](https://code.claude.com/docs/en/agent-teams) and [cross-sessi
    - Inbound messages are always framed as untrusted, never as consent.
 4. **Relay ↔ relay and external agents = A2A.**
    - The relay publishes an Agent Card per participant (or per team) and terminates A2A on their behalf.
-   - A2A Tasks map onto Blether's ask/handoff, `input-required` maps to "awaiting developer approval", and webhooks go to the relay, which *is* reachable.
+   - A2A Tasks map onto Blether's ask/handoff, `input-required` maps to "awaiting developer approval", and webhooks go to the relay, which _is_ reachable.
    - This gives interoperability with Gemini CLI remote subagents and enterprise A2A platforms, without needing laptops to be A2A servers.
 5. **Transport between bridge and relay:** start with plain WebSocket or HTTPS long-poll under Blether's own small schema. Revisit SLIM if group E2EE (MLS) or multi-relay routing becomes a requirement.
 
 ### Trade-offs
 
-| Choice | Gain | Cost / risk |
-|---|---|---|
-| MCP at the edge | Works with every coding agent today; outbound-only | MCP has no standard "deliver message to model" mechanism, so non-Claude agents must poll and may miss time-sensitive messages |
-| Claude channels for push | True async delivery matching agent-teams UX | Research preview; custom channels need a dev flag or an org allowlist; Claude-only; incompatible with the `2026-07-28` negotiation today; stdio only |
-| A2A between relays | Standard, LF-governed, enterprise reach, natural task model | Second protocol to implement; A2A identity and registry are not standardised; little coding-agent adoption |
-| A2A everywhere, no MCP edge | One protocol | No coding agent is an A2A *receiver*; laptops still need a relay or tunnel; the client role is experimental only in Gemini |
-| Zed ACP daemon driving agents | Universal push into any ACP agent | Blether owns the agent process instead of the developer's live session; Claude and Codex only via adapters |
-| Own relay vs. SLIM | Simple, fits exactly | Own security work (E2EE, identity) instead of using MLS and SLIM routing |
-| Relying on Anthropic Remote Control | Already cross-machine | Single user only, Claude only, Anthropic-hosted; not a basis for a multi-developer product |
+| Choice                              | Gain                                                        | Cost / risk                                                                                                                                          |
+| ----------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP at the edge                     | Works with every coding agent today; outbound-only          | MCP has no standard "deliver message to model" mechanism, so non-Claude agents must poll and may miss time-sensitive messages                        |
+| Claude channels for push            | True async delivery matching agent-teams UX                 | Research preview; custom channels need a dev flag or an org allowlist; Claude-only; incompatible with the `2026-07-28` negotiation today; stdio only |
+| A2A between relays                  | Standard, LF-governed, enterprise reach, natural task model | Second protocol to implement; A2A identity and registry are not standardised; little coding-agent adoption                                           |
+| A2A everywhere, no MCP edge         | One protocol                                                | No coding agent is an A2A _receiver_; laptops still need a relay or tunnel; the client role is experimental only in Gemini                           |
+| Zed ACP daemon driving agents       | Universal push into any ACP agent                           | Blether owns the agent process instead of the developer's live session; Claude and Codex only via adapters                                           |
+| Own relay vs. SLIM                  | Simple, fits exactly                                        | Own security work (E2EE, identity) instead of using MLS and SLIM routing                                                                             |
+| Relying on Anthropic Remote Control | Already cross-machine                                       | Single user only, Claude only, Anthropic-hosted; not a basis for a multi-developer product                                                           |
 
 ## Open questions for the team
 
@@ -264,8 +264,8 @@ From [agent teams](https://code.claude.com/docs/en/agent-teams) and [cross-sessi
 2. **Should Blether depend on a research-preview Claude feature (channels)?** Is requiring `--dangerously-load-development-channels`, or an org `allowedChannelPlugins` entry, acceptable for early users?
 3. **Which MCP revision should the bridge target?** `2025-11-25` keeps Claude channels working; `2026-07-28` is current but disables channel registration in Claude Code today.
 4. **Identity:** how are participants named and authenticated? Options include OAuth via the relay, GitHub identity, signed A2A Agent Cards, or DIDs. Is the unit a person, a session, or a session-in-a-repo?
-5. **Trust and policy model:** what are the default autonomy levels? Should inbound messages be able to trigger *actions*, or only information? How should cross-agent prompt injection be audited?
+5. **Trust and policy model:** what are the default autonomy levels? Should inbound messages be able to trigger _actions_, or only information? How should cross-agent prompt injection be audited?
 6. **Hosting:** is there one central SaaS relay, a per-team self-hosted relay, or a federation of relays over A2A? Is end-to-end encryption needed so the relay can't read messages?
-7. **Offline semantics:** a participant is a *live session*. Do messages to an offline session queue (as with Claude cross-session messaging), expire, or fall back to the human (for example by email or chat)?
+7. **Offline semantics:** a participant is a _live session_. Do messages to an offline session queue (as with Claude cross-session messaging), expire, or fall back to the human (for example by email or chat)?
 8. **Task list ownership:** should Blether's shared task list be authoritative, or sync with GitHub Issues or each agent's native task tools (such as Claude's `TaskCreate`)?
 9. **A2A scope for v1:** is the A2A federation edge needed at launch, or can it wait until a second relay or an external agent exists?
