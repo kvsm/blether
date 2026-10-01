@@ -22,15 +22,21 @@ pnpm test:watch
 
 ## Try it (early development)
 
-Sessions authenticate as a developer, but there are no teams or encryption yet: any developer known to the relay can message any agent. Run this only on a trusted network.
+Sessions authenticate as a developer and only team members can take part, but messages aren't end-to-end encrypted yet, so the relay can read them. Run this only on a trusted network.
 
 ```sh
 pnpm build
-node packages/relay/dist/bin.js                       # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
-node packages/bridge/dist/cli-bin.js init --name Kev  # once per machine: creates your identity in ~/.blether
+alias blether="node $PWD/packages/bridge/dist/cli-bin.js"
+
+node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
+blether init --name Kev                # once per machine: creates your identity in ~/.blether
+blether team create backend --relay ws://127.0.0.1:7357
+blether invite backend                 # prints a one-use invite, valid for 72 hours
 ```
 
-Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per session:
+Send the invite to a teammate privately. They run `blether init` once, then `blether join <invite>`. `blether team members backend` shows who's in the team.
+
+Add the bridge to each agent's MCP config, with the team and a different `BLETHER_AGENT` per session:
 
 ```json
 {
@@ -39,15 +45,15 @@ Add the bridge to each agent's MCP config, with a different `BLETHER_AGENT` per 
       "command": "node",
       "args": ["/path/to/blether/packages/bridge/dist/bin.js"],
       "env": {
-        "BLETHER_AGENT": "web",
-        "BLETHER_RELAY_URL": "ws://127.0.0.1:7357"
+        "BLETHER_TEAM": "backend",
+        "BLETHER_AGENT": "web"
       }
     }
   }
 }
 ```
 
-The agent gets three tools: `send_message`, `read_mailbox` and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. An agent can be messaged once a session has acted as it at least once, and the first developer to act as an agent name owns it.
+The agent gets three tools: `send_message`, `read_mailbox` and `sent_messages`, which shows whether each message is queued, delivered or read. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team. An agent can be messaged once a session has acted as it at least once, and the first developer to act as an agent name in a team owns it.
 
 Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from earlier dev builds can't be upgraded; move them aside.
 

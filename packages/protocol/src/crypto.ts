@@ -33,6 +33,17 @@ export function generateMachineKey(): MachineKey {
   return { publicKey: encode(publicKey), secretKey: encode(privateKey) };
 }
 
+/**
+ * Derives a signing key pair deterministically from `secret`, so anyone who
+ * knows the secret gets the same key. `context` keeps keys for different
+ * purposes apart.
+ */
+export function keyFromSecret(context: string, secret: string): MachineKey {
+  const seed = sodium.crypto_generichash(32, `${context}\n${secret}`, null);
+  const { publicKey, privateKey } = sodium.crypto_sign_seed_keypair(seed);
+  return { publicKey: encode(publicKey), secretKey: encode(privateKey) };
+}
+
 export function sign(key: MachineKey, message: string): Signature {
   return encode(sodium.crypto_sign_detached(message, decode(key.secretKey)));
 }

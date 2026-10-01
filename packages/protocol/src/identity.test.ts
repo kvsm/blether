@@ -108,18 +108,16 @@ describe("identity", () => {
 });
 
 describe("challenge signatures", () => {
-  it("bind the signature to the challenge and the agent", () => {
+  it("bind the signature to the challenge, the team and the agent", () => {
     const machine = generateMachineKey();
-    const signature = signChallenge(machine, "challenge-1", "api");
+    const scope = { team: "team-1", agent: "api" };
+    const signature = signChallenge(machine, "challenge-1", scope);
+    const check = (challenge: string, s: typeof scope) =>
+      verifyChallenge(machine.publicKey, challenge, s, signature);
 
-    expect(
-      verifyChallenge(machine.publicKey, "challenge-1", "api", signature),
-    ).toBe(true);
-    expect(
-      verifyChallenge(machine.publicKey, "challenge-2", "api", signature),
-    ).toBe(false);
-    expect(
-      verifyChallenge(machine.publicKey, "challenge-1", "web", signature),
-    ).toBe(false);
+    expect(check("challenge-1", scope)).toBe(true);
+    expect(check("challenge-2", scope)).toBe(false);
+    expect(check("challenge-1", { ...scope, agent: "web" })).toBe(false);
+    expect(check("challenge-1", { ...scope, team: "team-2" })).toBe(false);
   });
 });

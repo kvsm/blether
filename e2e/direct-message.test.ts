@@ -5,7 +5,12 @@ import {
   RelayError,
   createBridgeServer,
 } from "@blether/bridge";
-import { createIdentity, generateMachineKey } from "@blether/protocol";
+import {
+  createIdentity,
+  createTeam,
+  generateMachineKey,
+  verifyIdentityLog,
+} from "@blether/protocol";
 import { startRelay, type Relay } from "@blether/relay";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -21,9 +26,18 @@ const ChannelNotice = z.object({
 });
 type ChannelNotice = z.infer<typeof ChannelNotice>["params"];
 
-/** One developer owns every agent in these tests. */
+/** One developer, in one team, owns every agent in these tests. */
 const machine = generateMachineKey();
 const credentials = { machine, identity: createIdentity(machine, "Kev") };
+let team: string;
+
+async function createTestTeam(relay: Relay) {
+  const cli = await RelayConnection.connect(relay.url, credentials);
+  const signer = { machine, identity: verifyIdentityLog(credentials.identity) };
+  const created = await cli.createTeam(createTeam("backend", signer));
+  await cli.close();
+  return created.team.id;
+}
 
 /**
  * Connects to the relay as `agent`, retrying while the relay still holds the
@@ -32,7 +46,10 @@ const credentials = { machine, identity: createIdentity(machine, "Kev") };
 async function connectAs(relay: Relay, agent: string) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await RelayConnection.connect(relay.url, agent, credentials);
+      return await RelayConnection.connect(relay.url, credentials, {
+        team,
+        agent,
+      });
     } catch (error) {
       const inUse =
         error instanceof RelayError && error.code === "agent-in-use";
@@ -85,6 +102,7 @@ describe("messaging between agents through bridges and a relay", () => {
 
   beforeEach(async () => {
     relay = await startRelay();
+    team = await createTestTeam(relay);
   });
   afterEach(async () => {
     await Promise.all(sessions.map((s) => s.close()));
@@ -162,7 +180,7 @@ describe("messaging between agents through bridges and a relay", () => {
 
     expect(sent).toEqual({
       isError: true,
-      text: "Not sent: There is no agent called apii.",
+      text: "Not sent: There is no agent called apii in this team.",
     });
   });
 

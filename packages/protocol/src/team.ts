@@ -1,0 +1,343 @@
+import { z } from "zod";
+import {
+  PublicKey,
+  Signature,
+  canonicalJson,
+  hash,
+  keyFromSecret,
+  randomToken,
+  sign,
+  verify,
+  type MachineKey,
+} from "./crypto.js";
+import type { Identity } from "./identity.js";
+
+/**
+ * A team's membership log (ADR 0006): an append-only chain of signed entries.
+ * Each entry names the hash of the one before it. The team id is the hash of
+ * the first entry.
+ *
+ * Joining uses an invite key pair derived from the invite secret: the
+ * inviter publishes only its public key, and the invitee proves they hold the
+ * secret by signing their own "member added" entry with it.
+ */
+
+/** A team's name, and the local name a developer knows it by. */
+export const TeamName = z
+  .string()
+  .regex(
+    /^[a-z0-9][a-z0-9-]{0,62}$/,
+    "lowercase letters, digits and hyphens, starting with a letter or digit",
+  );
+export type TeamName = z.infer<typeof TeamName>;
+
+const IdentityId = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
+const InviteId = z.string().regex(/^[A-Za-z0-9_-]{22}$/);
+
+export const DEFAULT_INVITE_TTL_HOURS = 72;
+const INVITE_KEY_CONTEXT = "blether-invite-v1";
+
+export const TeamEntry = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("team-created"),
+    name: TeamName,
+    createdAt: z.iso.datetime(),
+  }),
+  z.object({
+    type: z.literal("invite-created"),
+    invite: InviteId,
+    inviteKey: PublicKey,
+    expiresAt: z.iso.datetime(),
+    createdAt: z.iso.datetime(),
+  }),
+  z.object({
+    type: z.literal("invite-revoked"),
+    invite: InviteId,
+    createdAt: z.iso.datetime(),
+  }),
+  z.object({
+    type: z.literal("member-added"),
+    invite: InviteId,
+    createdAt: z.iso.datetime(),
+  }),
+]);
+export type TeamEntry = z.infer<typeof TeamEntry>;
+
+export const SignedTeamEntry = z.object({
+  entry: TeamEntry,
+  /** Hash of the previous signed entry; null for the first. */
+  prev: z.string().nullable(),
+  /** Identity id of the developer making the change. */
+  author: IdentityId,
+  /** The author's machine that signed it. */
+  signer: PublicKey,
+  signature: Signature,
+  /** member-added only: the same content signed by the invite key. */
+  inviteSignature: Signature.optional(),
+});
+export type SignedTeamEntry = z.infer<typeof SignedTeamEntry>;
+
+export const TeamLog = z.array(SignedTeamEntry).min(1);
+export type TeamLog = z.infer<typeof TeamLog>;
+
+export interface Invite {
+  id: string;
+  key: PublicKey;
+  invitedBy: string;
+  expiresAt: string;
+  status: "open" | "used" | "revoked";
+}
+
+/** What a verified membership log says about a team. */
+export interface Team {
+  id: string;
+  name: TeamName;
+  admin: string;
+  /** Identity ids of the members, the admin included. */
+  members: string[];
+  invites: Invite[];
+  /** Hash of the last entry: what the next entry's `prev` must be. */
+  head: string;
+}
+
+export class TeamError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TeamError";
+  }
+}
+
+/** The developer and machine signing a change. */
+export interface Signer {
+  identity: Identity;
+  machine: MachineKey;
+}
+
+function signedContent(
+  entry: TeamEntry,
+  prev: string | null,
+  author: string,
+): string {
+  return canonicalJson({ entry, prev, author });
+}
+
+function signEntry(
+  entry: TeamEntry,
+  prev: string | null,
+  by: Signer,
+): SignedTeamEntry {
+  return {
+    entry,
+    prev,
+    author: by.identity.id,
+    signer: by.machine.publicKey,
+    signature: sign(by.machine, signedContent(entry, prev, by.identity.id)),
+  };
+}
+
+export function entryHash(signed: SignedTeamEntry): string {
+  return hash(canonicalJson(signed));
+}
+
+/** Starts a new team with `by` as its Team Admin. */
+export function createTeam(
+  name: TeamName,
+  by: Signer,
+  now = new Date(),
+): TeamLog {
+  return [
+    signEntry(
+      {
+        type: "team-created",
+        name: TeamName.parse(name),
+        createdAt: now.toISOString(),
+      },
+      null,
+      by,
+    ),
+  ];
+}
+
+/** Creates an invite. `secret` goes in the invite string; only the entry goes to the relay. */
+export function createInvite(
+  team: Team,
+  by: Signer,
+  {
+    now = new Date(),
+    ttlHours = DEFAULT_INVITE_TTL_HOURS,
+  }: { now?: Date; ttlHours?: number } = {},
+): { entry: SignedTeamEntry; invite: string; secret: string } {
+  const secret = randomToken();
+  const invite = randomToken(16);
+  const inviteKey = keyFromSecret(INVITE_KEY_CONTEXT, secret);
+  const entry = signEntry(
+    {
+      type: "invite-created",
+      invite,
+      inviteKey: inviteKey.publicKey,
+      expiresAt: new Date(now.getTime() + ttlHours * 3_600_000).toISOString(),
+      createdAt: now.toISOString(),
+    },
+    team.head,
+    by,
+  );
+  return { entry, invite, secret };
+}
+
+export function revokeInvite(
+  team: Team,
+  invite: string,
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  return signEntry(
+    { type: "invite-revoked", invite, createdAt: now.toISOString() },
+    team.head,
+    by,
+  );
+}
+
+/** The entry that adds `by` to the team, proving they hold the invite's secret. */
+export function acceptInvite(
+  team: Team,
+  invite: string,
+  secret: string,
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  const entry: TeamEntry = {
+    type: "member-added",
+    invite,
+    createdAt: now.toISOString(),
+  };
+  const signed = signEntry(entry, team.head, by);
+  const inviteKey = keyFromSecret(INVITE_KEY_CONTEXT, secret);
+  return {
+    ...signed,
+    inviteSignature: sign(
+      inviteKey,
+      signedContent(entry, team.head, by.identity.id),
+    ),
+  };
+}
+
+/**
+ * Checks every entry of `log` and returns the team it describes. `identities`
+ * must include every author, keyed by identity id. Throws TeamError if the log
+ * doesn't verify.
+ */
+export function verifyTeamLog(
+  log: unknown,
+  identities: ReadonlyMap<string, Identity>,
+): Team {
+  const parsed = TeamLog.safeParse(log);
+  if (!parsed.success) throw new TeamError("Team log is malformed.");
+  const entries = parsed.data;
+
+  let team: Team | undefined;
+  let prev: string | null = null;
+
+  for (const [index, signed] of entries.entries()) {
+    const where = `Entry ${index} (${signed.entry.type})`;
+    if (signed.prev !== prev) {
+      throw new TeamError(`${where} doesn't follow the entry before it.`);
+    }
+    const author = identities.get(signed.author);
+    if (!author) throw new TeamError(`${where} has an unknown author.`);
+    if (!author.machines.includes(signed.signer)) {
+      throw new TeamError(
+        `${where} is signed by a machine its author doesn't own.`,
+      );
+    }
+    const content = signedContent(signed.entry, signed.prev, signed.author);
+    if (!verify(signed.signer, content, signed.signature)) {
+      throw new TeamError(`${where} has an invalid signature.`);
+    }
+
+    const { entry } = signed;
+    if (!team) {
+      if (entry.type !== "team-created") {
+        throw new TeamError("Team log must start with team-created.");
+      }
+      team = {
+        id: entryHash(signed),
+        name: entry.name,
+        admin: signed.author,
+        members: [signed.author],
+        invites: [],
+        head: "",
+      };
+    } else {
+      apply(team, signed, entry, content, where);
+    }
+    prev = entryHash(signed);
+    team.head = prev;
+  }
+
+  return team!;
+}
+
+function apply(
+  team: Team,
+  signed: SignedTeamEntry,
+  entry: TeamEntry,
+  content: string,
+  where: string,
+) {
+  const isMember = team.members.includes(signed.author);
+  const invite =
+    "invite" in entry
+      ? team.invites.find((i) => i.id === entry.invite)
+      : undefined;
+
+  switch (entry.type) {
+    case "team-created":
+      throw new TeamError(`${where}: a team can only be created once.`);
+    case "invite-created":
+      if (!isMember) throw new TeamError(`${where}: only members can invite.`);
+      if (invite) throw new TeamError(`${where}: invite id already used.`);
+      team.invites.push({
+        id: entry.invite,
+        key: entry.inviteKey,
+        invitedBy: signed.author,
+        expiresAt: entry.expiresAt,
+        status: "open",
+      });
+      return;
+    case "invite-revoked":
+      if (!invite) throw new TeamError(`${where}: no such invite.`);
+      if (signed.author !== invite.invitedBy && signed.author !== team.admin) {
+        throw new TeamError(
+          `${where}: only the inviter or the Team Admin can revoke an invite.`,
+        );
+      }
+      if (invite.status !== "open") {
+        throw new TeamError(`${where}: invite is already ${invite.status}.`);
+      }
+      invite.status = "revoked";
+      return;
+    case "member-added":
+      if (!invite) throw new TeamError(`${where}: no such invite.`);
+      if (invite.status !== "open") {
+        throw new TeamError(`${where}: invite is ${invite.status}.`);
+      }
+      if (isMember) throw new TeamError(`${where}: already a member.`);
+      if (
+        !signed.inviteSignature ||
+        !verify(invite.key, content, signed.inviteSignature)
+      ) {
+        throw new TeamError(`${where} isn't signed by the invite key.`);
+      }
+      if (entry.createdAt > invite.expiresAt) {
+        throw new TeamError(`${where}: invite had expired.`);
+      }
+      invite.status = "used";
+      team.members.push(signed.author);
+      return;
+  }
+}
+
+/** Whether an invite can still be accepted at `now`. */
+export function isInviteOpen(invite: Invite, now = new Date()): boolean {
+  return invite.status === "open" && now.toISOString() <= invite.expiresAt;
+}

@@ -6,10 +6,11 @@ import type {
   IdentityLog,
   Message,
   SentMessage,
+  TeamLog,
 } from "@blether/protocol";
 
 /** Bumped whenever the schema changes incompatibly. */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export class IncompatibleDatabaseError extends Error {
   constructor(path: string, version: number) {
@@ -22,10 +23,11 @@ export class IncompatibleDatabaseError extends Error {
 }
 
 /**
- * Durable storage for the relay: developers' identity logs, which developer
- * owns each agent, and agents' mailboxes. A message's body is kept only until
- * the recipient reads it; after that the relay keeps just enough to report
- * its delivery status to the sender.
+ * Durable storage for the relay: developers' identity logs, teams'
+ * membership logs, which developer owns each agent in a team, and agents'
+ * mailboxes. A message's body is kept only until the recipient reads it;
+ * after that the relay keeps just enough to report its delivery status to
+ * the sender.
  */
 export class MailboxStore {
   private readonly db: DatabaseSync;
@@ -52,13 +54,21 @@ export class MailboxStore {
         name TEXT NOT NULL,
         log  TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS teams (
+        id      TEXT PRIMARY KEY,
+        log     TEXT NOT NULL,
+        entries INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS agents (
-        name  TEXT PRIMARY KEY,
-        owner TEXT NOT NULL REFERENCES developers (id)
+        team  TEXT NOT NULL REFERENCES teams (id),
+        name  TEXT NOT NULL,
+        owner TEXT NOT NULL REFERENCES developers (id),
+        PRIMARY KEY (team, name)
       );
       CREATE TABLE IF NOT EXISTS messages (
         seq       INTEGER PRIMARY KEY AUTOINCREMENT,
         id        TEXT NOT NULL UNIQUE,
+        team      TEXT NOT NULL REFERENCES teams (id),
         sender    TEXT NOT NULL,
         recipient TEXT NOT NULL,
         body      TEXT,
@@ -66,10 +76,12 @@ export class MailboxStore {
         status    TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'read'))
       );
       CREATE INDEX IF NOT EXISTS messages_unread
-        ON messages (recipient, seq) WHERE status <> 'read';
-      CREATE INDEX IF NOT EXISTS messages_sent ON messages (sender, seq);
+        ON messages (team, recipient, seq) WHERE status <> 'read';
+      CREATE INDEX IF NOT EXISTS messages_sent ON messages (team, sender, seq);
     `);
   }
+
+  // Developers
 
   /** Stores a verified identity, replacing any older copy of its log. */
   saveDeveloper(identity: Identity, log: IdentityLog): void {
@@ -81,35 +93,92 @@ export class MailboxStore {
       .run(identity.id, identity.name, JSON.stringify(log));
   }
 
-  /** The developer id that owns `agent`, if any session has acted as it. */
-  agentOwner(agent: AgentName): string | undefined {
+  /** The stored identity logs of the given developers that the relay knows. */
+  developerLogs(ids: Iterable<string>): IdentityLog[] {
+    const get = this.db.prepare("SELECT log FROM developers WHERE id = ?");
+    const logs: IdentityLog[] = [];
+    for (const id of new Set(ids)) {
+      const row = get.get(id) as { log: string } | undefined;
+      if (row) logs.push(JSON.parse(row.log) as IdentityLog);
+    }
+    return logs;
+  }
+
+  // Teams
+
+  teamLog(team: string): TeamLog | undefined {
     const row = this.db
-      .prepare("SELECT owner FROM agents WHERE name = ?")
-      .get(agent) as { owner: string } | undefined;
+      .prepare("SELECT log FROM teams WHERE id = ?")
+      .get(team) as { log: string } | undefined;
+    return row && (JSON.parse(row.log) as TeamLog);
+  }
+
+  /** Stores a new team's log. Returns false if the team already exists. */
+  createTeam(team: string, log: TeamLog): boolean {
+    const { changes } = this.db
+      .prepare(
+        "INSERT OR IGNORE INTO teams (id, log, entries) VALUES (?, ?, ?)",
+      )
+      .run(team, JSON.stringify(log), log.length);
+    return changes === 1;
+  }
+
+  /**
+   * Replaces a team's log with `log`, but only if the stored log still has
+   * `expectedEntries` entries, so concurrent appends can't both succeed.
+   */
+  updateTeam(team: string, log: TeamLog, expectedEntries: number): boolean {
+    const { changes } = this.db
+      .prepare(
+        "UPDATE teams SET log = ?, entries = ? WHERE id = ? AND entries = ?",
+      )
+      .run(JSON.stringify(log), log.length, team, expectedEntries);
+    return changes === 1;
+  }
+
+  // Agents
+
+  /** The developer id that owns `agent` in `team`, if any session has acted as it. */
+  agentOwner(team: string, agent: AgentName): string | undefined {
+    const row = this.db
+      .prepare("SELECT owner FROM agents WHERE team = ? AND name = ?")
+      .get(team, agent) as { owner: string } | undefined;
     return row?.owner;
   }
 
   /**
-   * Records that `owner` owns `agent`, so others can message it. Until agents
-   * are created deliberately (#8), the first developer to act as a name owns it.
+   * Records that `owner` owns `agent` in `team`, so others can message it.
+   * Until agents are created deliberately (#8), the first developer to act as
+   * a name owns it.
    */
-  claimAgent(agent: AgentName, owner: string): void {
+  claimAgent(team: string, agent: AgentName, owner: string): void {
     this.db
-      .prepare("INSERT OR IGNORE INTO agents (name, owner) VALUES (?, ?)")
-      .run(agent, owner);
+      .prepare(
+        "INSERT OR IGNORE INTO agents (team, name, owner) VALUES (?, ?, ?)",
+      )
+      .run(team, agent, owner);
   }
+
+  // Mailboxes
 
   /**
    * Puts a message in its recipient's mailbox with status `queued`.
    * Returns false, storing nothing, if a message with that id already exists.
    */
-  add(message: Message): boolean {
+  add(team: string, message: Message): boolean {
     const { changes } = this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages (id, sender, recipient, body, sent_at, status)
-         VALUES (?, ?, ?, ?, ?, 'queued')`,
+        `INSERT OR IGNORE INTO messages (id, team, sender, recipient, body, sent_at, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'queued')`,
       )
-      .run(message.id, message.from, message.to, message.body, message.sentAt);
+      .run(
+        message.id,
+        team,
+        message.from,
+        message.to,
+        message.body,
+        message.sentAt,
+      );
     return changes === 1;
   }
 
@@ -121,23 +190,23 @@ export class MailboxStore {
       .run(id);
   }
 
-  /** Marks messages in `agent`'s mailbox read and discards their bodies. Ids for other mailboxes are ignored. */
-  markRead(agent: AgentName, ids: readonly string[]): void {
+  /** Marks messages in an agent's mailbox read and discards their bodies. Ids for other mailboxes are ignored. */
+  markRead(team: string, agent: AgentName, ids: readonly string[]): void {
     const update = this.db.prepare(
       `UPDATE messages SET status = 'read', body = NULL
-       WHERE id = ? AND recipient = ? AND status <> 'read'`,
+       WHERE id = ? AND team = ? AND recipient = ? AND status <> 'read'`,
     );
-    for (const id of ids) update.run(id, agent);
+    for (const id of ids) update.run(id, team, agent);
   }
 
-  /** Every message in `agent`'s mailbox it hasn't read yet, oldest first. */
-  unread(agent: AgentName): Message[] {
+  /** Every message in an agent's mailbox it hasn't read yet, oldest first. */
+  unread(team: string, agent: AgentName): Message[] {
     const rows = this.db
       .prepare(
         `SELECT id, sender, recipient, body, sent_at FROM messages
-         WHERE recipient = ? AND status <> 'read' ORDER BY seq`,
+         WHERE team = ? AND recipient = ? AND status <> 'read' ORDER BY seq`,
       )
-      .all(agent) as unknown as MessageRow[];
+      .all(team, agent) as unknown as MessageRow[];
     return rows.map((row) => ({
       id: row.id,
       from: row.sender,
@@ -147,14 +216,14 @@ export class MailboxStore {
     }));
   }
 
-  /** The `limit` messages `agent` sent most recently, newest first. */
-  sentBy(agent: AgentName, limit: number): SentMessage[] {
+  /** The `limit` messages an agent sent most recently, newest first. */
+  sentBy(team: string, agent: AgentName, limit: number): SentMessage[] {
     const rows = this.db
       .prepare(
         `SELECT id, recipient, sent_at, status FROM messages
-         WHERE sender = ? ORDER BY seq DESC LIMIT ?`,
+         WHERE team = ? AND sender = ? ORDER BY seq DESC LIMIT ?`,
       )
-      .all(agent, limit) as unknown as SentRow[];
+      .all(team, agent, limit) as unknown as SentRow[];
     return rows.map((row) => ({
       id: row.id,
       to: row.recipient,
