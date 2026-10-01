@@ -81,6 +81,22 @@ export const TeamEntry = z.discriminatedUnion("type", [
     roles: z.array(RoleName),
     createdAt: z.iso.datetime(),
   }),
+  /** Deletes an agent and its mailbox. Its owner or the Team Admin can. */
+  z.object({
+    type: z.literal("agent-deleted"),
+    agent: AgentName,
+    createdAt: z.iso.datetime(),
+  }),
+  /**
+   * Removes a developer from the team, with all their agents and mailboxes,
+   * and revokes any invites they created that are still open. Only the Team
+   * Admin can, and not themselves.
+   */
+  z.object({
+    type: z.literal("member-removed"),
+    member: IdentityId,
+    createdAt: z.iso.datetime(),
+  }),
 ]);
 export type TeamEntry = z.infer<typeof TeamEntry>;
 
@@ -121,6 +137,8 @@ export interface Team {
   roles: RoleName[];
   /** The team's agents, in the order they were created. */
   agents: TeamAgent[];
+  /** Agents that have been deleted, oldest first. */
+  deletedAgents: DeletedAgent[];
   /** Hash of the last entry: what the next entry's `prev` must be. */
   head: string;
 }
@@ -132,6 +150,15 @@ export interface TeamAgent {
   owner: string;
   roles: RoleName[];
   createdAt: string;
+  /** Set when the name belonged to an agent that was deleted: this is a new agent, not that one. */
+  replacesDeleted?: true;
+}
+
+/** An agent that was deleted, or whose owner was removed from the team. */
+export interface DeletedAgent {
+  name: AgentName;
+  owner: string;
+  deletedAt: string;
 }
 
 export class TeamError extends Error {
@@ -216,6 +243,34 @@ export function createInvite(
     by,
   );
   return { entry, invite, secret };
+}
+
+/** Deletes agent `name`, which `by` must own unless they're the Team Admin. */
+export function deleteAgent(
+  team: Team,
+  name: AgentName,
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  return signEntry(
+    { type: "agent-deleted", agent: name, createdAt: now.toISOString() },
+    team.head,
+    by,
+  );
+}
+
+/** Removes developer `member` from the team. `by` must be the Team Admin. */
+export function removeMember(
+  team: Team,
+  member: string,
+  by: Signer,
+  now = new Date(),
+): SignedTeamEntry {
+  return signEntry(
+    { type: "member-removed", member, createdAt: now.toISOString() },
+    team.head,
+    by,
+  );
 }
 
 /** Adds `role` to the team's agreed list of roles. */
@@ -359,6 +414,7 @@ export function verifyTeamLog(
         invites: [],
         roles: [],
         agents: [],
+        deletedAgents: [],
         head: "",
       };
     } else {
@@ -451,6 +507,9 @@ function apply(
         owner: signed.author,
         roles: [...entry.roles],
         createdAt: entry.createdAt,
+        ...(team.deletedAgents.some((d) => d.name === entry.agent)
+          ? { replacesDeleted: true as const }
+          : {}),
       });
       return;
     case "agent-roles-set": {
@@ -465,7 +524,56 @@ function apply(
       agent.roles = [...entry.roles];
       return;
     }
+    case "agent-deleted": {
+      const agent = team.agents.find((a) => a.name === entry.agent);
+      if (!agent) throw new TeamError(`${where}: no such agent.`);
+      if (agent.owner !== signed.author && signed.author !== team.admin) {
+        throw new TeamError(
+          `${where}: only an agent's owner or the Team Admin can delete it.`,
+        );
+      }
+      deleteAgents(team, (a) => a.name === entry.agent, entry.createdAt);
+      return;
+    }
+    case "member-removed": {
+      if (signed.author !== team.admin) {
+        throw new TeamError(
+          `${where}: only the Team Admin can remove members.`,
+        );
+      }
+      if (entry.member === team.admin) {
+        throw new TeamError(
+          `${where}: the Team Admin can't remove themselves.`,
+        );
+      }
+      if (!team.members.includes(entry.member)) {
+        throw new TeamError(`${where}: not a member.`);
+      }
+      team.members = team.members.filter((m) => m !== entry.member);
+      deleteAgents(team, (a) => a.owner === entry.member, entry.createdAt);
+      for (const invite of team.invites) {
+        if (invite.invitedBy === entry.member && invite.status === "open") {
+          invite.status = "revoked";
+        }
+      }
+      return;
+    }
   }
+}
+
+function deleteAgents(
+  team: Team,
+  matches: (agent: TeamAgent) => boolean,
+  deletedAt: string,
+) {
+  for (const agent of team.agents.filter(matches)) {
+    team.deletedAgents.push({
+      name: agent.name,
+      owner: agent.owner,
+      deletedAt,
+    });
+  }
+  team.agents = team.agents.filter((a) => !matches(a));
 }
 
 function checkRoles(team: Team, roles: readonly string[], where: string) {

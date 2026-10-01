@@ -20,6 +20,7 @@ import {
   type Message,
   type MessagePayload,
   type RelayFrame,
+  type SentMessage,
   type TeamLog,
 } from "@blether/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -80,7 +81,7 @@ function delivery(
 }
 
 /** A relay that welcomes `api`, serves the team log, and delivers `messages`. */
-async function fakeRelay(messages: Message[]) {
+async function fakeRelay(messages: Message[], lost: SentMessage[] = []) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   await new Promise((resolve) => wss.once("listening", resolve));
   wss.on("connection", (socket) => {
@@ -97,6 +98,7 @@ async function fakeRelay(messages: Message[]) {
           agent: "api",
         });
         for (const message of messages) send({ type: "deliver", message });
+        if (lost.length > 0) send({ type: "lost", messages: lost });
       }
       if (frame?.type === "get-team") {
         send({
@@ -136,8 +138,9 @@ describe("receiving encrypted messages", () => {
   const receive = async (
     messages: Message[],
     device: DeviceKey = desktop,
+    lost: SentMessage[] = [],
   ): Promise<MailboxItem[]> => {
-    const relay = await fakeRelay(messages);
+    const relay = await fakeRelay(messages, lost);
     const connection = await RelayConnection.connect(
       relay.url,
       { device, identity },
@@ -217,5 +220,16 @@ describe("receiving encrypted messages", () => {
     expect(await receive([message])).toHaveLength(1);
 
     expect(await receive([message])).toEqual([]);
+  });
+
+  it("ignores a relay's claim that a message to an agent still in the team was lost", async () => {
+    const claim: SentMessage = {
+      id: randomUUID(),
+      to: "web",
+      sentAt: new Date().toISOString(),
+      status: "lost",
+    };
+
+    expect(await receive([], desktop, [claim])).toEqual([]);
   });
 });

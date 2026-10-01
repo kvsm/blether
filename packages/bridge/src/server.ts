@@ -354,10 +354,13 @@ export function createBridgeServer(
           roster
             .map((agent) => {
               const you = agent.name === relay.agent ? " (you)" : "";
+              const replacement = agent.replacesDeleted
+                ? " (a new agent: an earlier one with this name was deleted)"
+                : "";
               const roles =
                 agent.roles.length > 0 ? agent.roles.join(", ") : "no roles";
               const presence = agent.online ? "online" : "offline";
-              return `${agent.name}${you}: ${agent.developer}'s agent, ${roles}, ${presence}`;
+              return `${agent.name}${you}${replacement}: ${agent.developer}'s agent, ${roles}, ${presence}`;
             })
             .join("\n"),
         );
@@ -434,7 +437,7 @@ function ringDoorbell(server: McpServer, relay: RelayConnection) {
       });
   };
 
-  relay.onArrival((message) => ring(message.from));
+  relay.onArrival((item) => ring(item.kind === "lost" ? undefined : item.from));
   server.server.oninitialized = () => {
     // The backlog, delivered as the bridge connected, may still be being
     // decrypted: wait for it, then announce it once.
@@ -538,6 +541,16 @@ function formatSent(message: SentMessage): string {
 }
 
 function formatItem(item: MailboxItem, sentLog?: SentLog): string {
+  if (item.kind === "lost") {
+    const original = sentLog?.get(item.id);
+    const text = original
+      ? `Your message was: "${original.body}"`
+      : "Its text isn't kept on this device.";
+    return (
+      `<lost id="${item.id}" to="${item.to}">Your message to ${item.to} will never be read: that agent was deleted from the team before reading it. ${text} ` +
+      "If it still matters, check list_agents for who now does that work and send it to them.</lost>"
+    );
+  }
   if (item.kind === "unreadable") {
     return `<notice id="${item.id}" from="${item.from}">${item.detail}</notice>`;
   }

@@ -69,6 +69,37 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   });
 
   const sessions = new Map<string, WebSocket>();
+  /** The developer behind each agent session, by session key. */
+  const sessionOwners = new Map<string, string>();
+
+  /** Sends an agent session the lost-message notices it hasn't acknowledged. */
+  const sendLost = (socket: WebSocket, team: string, agent: AgentName) => {
+    const messages = store.unackedLost(team, agent);
+    if (messages.length === 0) return;
+    const frame: RelayFrame = { type: "lost", messages };
+    socket.send(JSON.stringify(frame));
+  };
+
+  /**
+   * After an entry deletes agents (directly, or by removing their
+   * developer): their mailboxes are lost, their sessions and any of a
+   * removed developer's are closed, and senders who are online are told.
+   */
+  const applyRemovals = (team: string, before: Team, after: Team) => {
+    const deleted = after.deletedAgents.slice(before.deletedAgents.length);
+    const removed = before.members.filter((m) => !after.members.includes(m));
+    if (deleted.length === 0 && removed.length === 0) return;
+    for (const agent of deleted) store.loseMailbox(team, agent.name);
+    for (const [key, socket] of sessions) {
+      const [sessionTeam, agent] = key.split("\n") as [string, string];
+      if (sessionTeam !== team) continue;
+      const gone =
+        deleted.some((d) => d.name === agent) ||
+        removed.includes(sessionOwners.get(key) ?? "");
+      if (gone) socket.close(4000, "This agent was deleted from the team.");
+      else sendLost(socket, team, agent);
+    }
+  };
 
   const deliver = (socket: WebSocket, message: Message) => {
     const frame: RelayFrame = { type: "deliver", message };
@@ -210,6 +241,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           }
           scope = requested;
           sessions.set(sessionKey(scope), socket);
+          sessionOwners.set(sessionKey(scope), identity.id);
         }
 
         developer = identity;
@@ -223,6 +255,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           for (const message of store.unread(scope.team, scope.agent)) {
             deliver(socket, message);
           }
+          sendLost(socket, scope.team, scope.agent);
         }
         return;
       }
@@ -328,8 +361,9 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             }
           }
           const log = [...current, frame.entry];
+          let after: Team;
           try {
-            verifyTeam(log);
+            after = verifyTeam(log);
           } catch (error) {
             if (!(error instanceof TeamError)) throw error;
             fail("team-rejected", error.message, frame.requestId);
@@ -344,6 +378,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             return;
           }
           send(teamReply(frame.requestId, log));
+          applyRemovals(frame.team, before, after);
           return;
         }
 
@@ -419,6 +454,9 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
         case "read":
           store.markRead(scope.team, scope.agent, frame.ids);
           return;
+        case "ack-lost":
+          store.ackLost(scope.team, scope.agent, frame.ids);
+          return;
         case "list-sent":
           send({
             type: "sent-list",
@@ -432,6 +470,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     socket.on("close", () => {
       if (scope && sessions.get(sessionKey(scope)) === socket) {
         sessions.delete(sessionKey(scope));
+        sessionOwners.delete(sessionKey(scope));
       }
     });
   });

@@ -38,7 +38,12 @@ export const Message = z.object({
 export type Message = z.infer<typeof Message>;
 
 /** How far a message has got, as its sender sees it. Never says whether it was acted on (ADR 0001). */
-export const DeliveryStatus = z.enum(["queued", "delivered", "read"]);
+/**
+ * How far a message has got, as its sender sees it. `lost`: the recipient
+ * agent was deleted (or its developer removed) before it was read. Never
+ * says whether a message was acted on (ADR 0001).
+ */
+export const DeliveryStatus = z.enum(["queued", "delivered", "read", "lost"]);
 export type DeliveryStatus = z.infer<typeof DeliveryStatus>;
 
 /** A message the agent sent, without its body. */
@@ -99,6 +104,8 @@ export const ClientFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     team: z.string(),
   }),
+  /** The agent has seen these lost-message notices; the relay can forget them. */
+  z.object({ type: z.literal("ack-lost"), ids: z.array(z.uuid()).min(1) }),
 ]);
 export type ClientFrame = z.infer<typeof ClientFrame>;
 
@@ -166,6 +173,12 @@ export const RelayFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     online: z.array(AgentName),
   }),
+  /**
+   * Messages this agent sent that will never be read, because the recipient
+   * agent was deleted first. Sent when it happens and again on every hello
+   * until acknowledged. The bridge checks each against the team log.
+   */
+  z.object({ type: z.literal("lost"), messages: z.array(SentMessage) }),
   /** `id` is the id of the send, or the requestId of the request, that failed. */
   z.object({
     type: z.literal("error"),

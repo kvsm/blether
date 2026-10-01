@@ -107,7 +107,19 @@ export interface UnreadableMessage {
   detail: string;
 }
 
-export type MailboxItem = ReceivedMessage | UnreadableMessage;
+/**
+ * A message this agent sent that will never be read: the team log shows its
+ * recipient was deleted (or its developer removed) first.
+ */
+export interface LostMessage {
+  kind: "lost";
+  id: string;
+  /** The deleted agent it was sent to. */
+  to: AgentName;
+  sentAt: string;
+}
+
+export type MailboxItem = ReceivedMessage | UnreadableMessage | LostMessage;
 
 interface Welcome {
   developer: string;
@@ -122,6 +134,8 @@ export interface RosterEntry {
   roles: string[];
   /** Whether a session is currently acting as it. */
   online: boolean;
+  /** Set when an earlier agent with this name was deleted: this is a different agent. */
+  replacesDeleted: boolean;
 }
 
 /** The team and agent a bridge session acts as. */
@@ -152,6 +166,8 @@ export class RelayConnection {
   private readonly seen = new Set<string>();
   /** Messages read in this session, so they can be referred to later (e.g. to escalate). */
   private readonly readThisSession = new Map<string, ReceivedMessage>();
+  /** Lost-message notices already put in the mailbox this session. */
+  private readonly seenLost = new Set<string>();
   /** Deliveries are decrypted and verified one at a time, in order. */
   private inbox: Promise<void> = Promise.resolve();
   /** The team log as last verified, refreshed when it's missing something. */
@@ -380,8 +396,16 @@ export class RelayConnection {
   readMailbox(): MailboxItem[] {
     const items = this.unread.splice(0);
     const read = items
-      .filter((item) => item.kind === "message" || item.reason === "rejected")
+      .filter(
+        (item) =>
+          item.kind === "message" ||
+          (item.kind === "unreadable" && item.reason === "rejected"),
+      )
       .map((item) => item.id);
+    const lost = items.filter((i) => i.kind === "lost").map((i) => i.id);
+    if (lost.length > 0 && this.socket.readyState === WebSocket.OPEN) {
+      this.write({ type: "ack-lost", ids: lost });
+    }
     this.readMessages?.add(read);
     for (const item of items) {
       if (item.kind === "message") this.readThisSession.set(item.id, item);
@@ -440,6 +464,7 @@ export class RelayConnection {
       developer: identities.get(agent.owner)?.name ?? "(unknown)",
       roles: agent.roles,
       online: online.includes(agent.name),
+      replacesDeleted: agent.replacesDeleted === true,
     }));
   }
 
@@ -498,6 +523,36 @@ export class RelayConnection {
       }
     }
     return undefined;
+  }
+
+  /**
+   * Puts lost-message notices in the mailbox, but only those the verified
+   * team log bears out: the recipient must no longer be in the team. A relay
+   * can't make an agent think a message to a live agent was lost.
+   */
+  private async acceptLost(messages: SentMessage[]): Promise<void> {
+    const fresh = messages.filter((m) => !this.seenLost.has(m.id));
+    if (fresh.length === 0) return;
+    let team: Team;
+    try {
+      ({ team } = await this.currentTeam(true));
+    } catch {
+      return;
+    }
+    for (const message of fresh) {
+      const stillThere = team.agents.some((a) => a.name === message.to);
+      const deleted = team.deletedAgents.some((d) => d.name === message.to);
+      if (stillThere && !deleted) continue;
+      this.seenLost.add(message.id);
+      const item: LostMessage = {
+        kind: "lost",
+        id: message.id,
+        to: message.to,
+        sentAt: message.sentAt,
+      };
+      this.unread.push(item);
+      for (const listener of this.arrivalListeners) listener(item);
+    }
   }
 
   /** Decrypts and verifies one delivery, then puts it in the mailbox. */
@@ -668,6 +723,11 @@ export class RelayConnection {
         this.welcome?.resolve(frame);
         this.welcome = undefined;
         return;
+      case "lost": {
+        const { messages } = frame;
+        this.inbox = this.inbox.then(() => this.acceptLost(messages));
+        return;
+      }
       case "deliver": {
         const { message } = frame;
         if (this.seen.has(message.id)) return;
