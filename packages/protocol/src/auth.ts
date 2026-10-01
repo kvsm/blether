@@ -1,8 +1,8 @@
-import { sign, verify, type MachineKey } from "./crypto.js";
+import { sign, verify, type DeviceKey } from "./crypto.js";
 
 /**
  * When a bridge or the CLI connects, the relay sends a random challenge. The
- * client proves it holds a machine's secret key by signing the challenge
+ * client proves it holds a device's secret key by signing the challenge
  * together with the team and agent it wants to act as (empty for a CLI
  * session), so a signature can't be replayed on another connection, or for
  * another team or agent.
@@ -21,18 +21,18 @@ function authMessage(challenge: string, scope: SessionScope): string {
 }
 
 export function signChallenge(
-  machine: MachineKey,
+  device: DeviceKey,
   challenge: string,
   scope: SessionScope,
 ): string {
-  return sign(machine, authMessage(challenge, scope));
+  return sign(device, authMessage(challenge, scope));
 }
 
 export function verifyChallenge(
-  machinePublicKey: string,
+  devicePublicKey: string,
   challenge: string,
   scope: SessionScope,
   signature: string,
 ): boolean {
-  return verify(machinePublicKey, authMessage(challenge, scope), signature);
+  return verify(devicePublicKey, authMessage(challenge, scope), signature);
 }

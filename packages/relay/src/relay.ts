@@ -137,9 +137,9 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           return;
         }
         if (
-          !identity.machines.includes(frame.machine) ||
+          !identity.devices.includes(frame.device) ||
           !verifyChallenge(
-            frame.machine,
+            frame.device,
             challenge,
             { team: frame.team, agent: frame.agent },
             frame.signature,
@@ -147,7 +147,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
         ) {
           refuse(
             "authentication-failed",
-            "The challenge wasn't signed by one of this developer's machines.",
+            "The challenge wasn't signed by one of this developer's devices.",
           );
           return;
         }

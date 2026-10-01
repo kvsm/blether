@@ -13,25 +13,36 @@ import {
   PublicKey,
   TeamName,
   verifyIdentityLog,
-  type MachineKey,
+  type DeviceKey,
 } from "@blether/protocol";
 import { z } from "zod";
 
-/** What a bridge needs to prove who it is: this machine's key and its developer's identity log. */
+/** What a bridge needs to prove who it is: this device's key and its developer's identity log. */
 export interface Credentials {
-  machine: MachineKey;
+  device: DeviceKey;
   identity: IdentityLog;
 }
 
-/** Where this machine's Blether state lives: `BLETHER_HOME`, or `~/.blether`. */
+/** Where this device's Blether state lives: `BLETHER_HOME`, or `~/.blether`. */
 export function defaultBletherHome(): string {
   return process.env.BLETHER_HOME ?? join(homedir(), ".blether");
 }
 
-const MachineKeyFile = z.object({
+const DeviceKeyFile = z.object({
   publicKey: PublicKey,
   secretKey: z.string().min(1),
 });
+
+/** `BLETHER_HOME` was written by an earlier dev build whose files this one can't read. */
+export class OutdatedBletherHomeError extends Error {
+  constructor(home: string) {
+    super(
+      `${home} was created by an earlier development build of Blether and can't be read. ` +
+        `Move it aside (mv ${home} ${home}.old) and run \`blether init\` again.`,
+    );
+    this.name = "OutdatedBletherHomeError";
+  }
+}
 
 /**
  * Stores credentials as files in a directory readable only by the current
@@ -41,7 +52,12 @@ const MachineKeyFile = z.object({
 export class FileKeyStore {
   constructor(readonly home: string = defaultBletherHome()) {}
 
-  private get machinePath() {
+  private get devicePath() {
+    return join(this.home, "device-key.json");
+  }
+
+  /** Written by earlier builds, which called devices "machines". */
+  private get legacyPath() {
     return join(this.home, "machine-key.json");
   }
 
@@ -50,25 +66,32 @@ export class FileKeyStore {
   }
 
   exists(): boolean {
-    return existsSync(this.machinePath) || existsSync(this.identityPath);
+    return (
+      existsSync(this.devicePath) ||
+      existsSync(this.identityPath) ||
+      existsSync(this.legacyPath)
+    );
   }
 
   /** Loads and checks the stored credentials, or returns undefined if there are none. */
   load(): Credentials | undefined {
     if (!this.exists()) return undefined;
-    const machine = MachineKeyFile.parse(readJson(this.machinePath));
+    if (existsSync(this.legacyPath)) {
+      throw new OutdatedBletherHomeError(this.home);
+    }
+    const device = DeviceKeyFile.parse(readJson(this.devicePath));
     const identity = IdentityLog.parse(readJson(this.identityPath));
-    if (!verifyIdentityLog(identity).machines.includes(machine.publicKey)) {
+    if (!verifyIdentityLog(identity).devices.includes(device.publicKey)) {
       throw new Error(
-        `${this.identityPath} doesn't include this machine's key (${this.machinePath}).`,
+        `${this.identityPath} doesn't include this device's key (${this.devicePath}).`,
       );
     }
-    return { machine, identity };
+    return { device, identity };
   }
 
   save(credentials: Credentials): void {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
-    writePrivate(this.machinePath, credentials.machine);
+    writePrivate(this.devicePath, credentials.device);
     writePrivate(this.identityPath, credentials.identity);
   }
 }
@@ -83,7 +106,7 @@ function writePrivate(path: string, value: unknown) {
   if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
-/** What this machine remembers about a team its developer belongs to. */
+/** What this device remembers about a team its developer belongs to. */
 export const TeamRecord = z.object({
   /** The local name the developer uses for the team, e.g. in BLETHER_TEAM. */
   name: TeamName,
@@ -92,7 +115,7 @@ export const TeamRecord = z.object({
 });
 export type TeamRecord = z.infer<typeof TeamRecord>;
 
-/** The teams this machine's developer has created or joined, one file each under `<home>/teams`. */
+/** The teams this device's developer has created or joined, one file each under `<home>/teams`. */
 export class TeamDirectory {
   constructor(readonly home: string = defaultBletherHome()) {}
 

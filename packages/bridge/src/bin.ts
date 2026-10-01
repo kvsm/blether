@@ -18,8 +18,15 @@ if (!agent.success) {
   );
 }
 const store = new FileKeyStore();
+const loaded = (() => {
+  try {
+    return store.load();
+  } catch (error) {
+    return fail((error as Error).message);
+  }
+})();
 const credentials =
-  store.load() ??
+  loaded ??
   fail(
     `No Blether identity in ${store.home}. Run \`blether init --name "<your name>"\` first.`,
   );

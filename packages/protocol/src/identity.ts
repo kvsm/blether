@@ -6,16 +6,16 @@ import {
   hash,
   sign,
   verify,
-  type MachineKey,
+  type DeviceKey,
 } from "./crypto.js";
 
 /**
  * A developer's identity log (ADR 0006): an append-only list of signed
- * entries describing which machines belong to the developer. The first entry
+ * entries describing which devices belong to the developer. The first entry
  * creates the identity; the developer's identity id is its hash.
  *
- * Adding and revoking machines arrives with #6's third part; for now an
- * identity has exactly one machine.
+ * Adding and revoking devices arrives with #6's third part; for now an
+ * identity has exactly one device.
  */
 
 export const DeveloperName = z.string().trim().min(1).max(64);
@@ -24,7 +24,7 @@ export const IdentityEntry = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("identity-created"),
     name: DeveloperName,
-    machine: PublicKey,
+    device: PublicKey,
     createdAt: z.iso.datetime(),
   }),
 ]);
@@ -45,8 +45,8 @@ export interface Identity {
   /** Stable id: the hash of the log's first entry. */
   id: string;
   name: string;
-  /** Public keys of the developer's machines. */
-  machines: PublicKey[];
+  /** Public keys of the developer's devices. */
+  devices: PublicKey[];
 }
 
 export class IdentityError extends Error {
@@ -56,23 +56,23 @@ export class IdentityError extends Error {
   }
 }
 
-/** Creates a new identity whose first machine is `machine`. */
+/** Creates a new identity whose first device is `device`. */
 export function createIdentity(
-  machine: MachineKey,
+  device: DeviceKey,
   name: string,
   now = new Date(),
 ): IdentityLog {
   const entry: IdentityEntry = {
     type: "identity-created",
     name: DeveloperName.parse(name),
-    machine: machine.publicKey,
+    device: device.publicKey,
     createdAt: now.toISOString(),
   };
   return [
     {
       entry,
-      signer: machine.publicKey,
-      signature: sign(machine, canonicalJson(entry)),
+      signer: device.publicKey,
+      signature: sign(device, canonicalJson(entry)),
     },
   ];
 }
@@ -86,9 +86,9 @@ export function verifyIdentityLog(log: unknown): Identity {
   if (first!.entry.type !== "identity-created") {
     throw new IdentityError("Identity log must start with identity-created.");
   }
-  if (first!.signer !== first!.entry.machine) {
+  if (first!.signer !== first!.entry.device) {
     throw new IdentityError(
-      "identity-created must be signed by its own machine.",
+      "identity-created must be signed by its own device.",
     );
   }
   if (!verifySigned(first!)) {
@@ -96,14 +96,14 @@ export function verifyIdentityLog(log: unknown): Identity {
   }
   if (rest.length > 0) {
     throw new IdentityError(
-      "This version only supports single-machine identities.",
+      "This version only supports single-device identities.",
     );
   }
 
   return {
     id: hash(canonicalJson(first)),
     name: first!.entry.name,
-    machines: [first!.entry.machine],
+    devices: [first!.entry.device],
   };
 }
 

@@ -8,7 +8,7 @@ import {
   randomToken,
   sign,
   verify,
-  type MachineKey,
+  type DeviceKey,
 } from "./crypto.js";
 import type { Identity } from "./identity.js";
 
@@ -69,7 +69,7 @@ export const SignedTeamEntry = z.object({
   prev: z.string().nullable(),
   /** Identity id of the developer making the change. */
   author: IdentityId,
-  /** The author's machine that signed it. */
+  /** The author's device that signed it. */
   signer: PublicKey,
   signature: Signature,
   /** member-added only: the same content signed by the invite key. */
@@ -107,10 +107,10 @@ export class TeamError extends Error {
   }
 }
 
-/** The developer and machine signing a change. */
+/** The developer and device signing a change. */
 export interface Signer {
   identity: Identity;
-  machine: MachineKey;
+  device: DeviceKey;
 }
 
 function signedContent(
@@ -130,8 +130,8 @@ function signEntry(
     entry,
     prev,
     author: by.identity.id,
-    signer: by.machine.publicKey,
-    signature: sign(by.machine, signedContent(entry, prev, by.identity.id)),
+    signer: by.device.publicKey,
+    signature: sign(by.device, signedContent(entry, prev, by.identity.id)),
   };
 }
 
@@ -244,9 +244,9 @@ export function verifyTeamLog(
     }
     const author = identities.get(signed.author);
     if (!author) throw new TeamError(`${where} has an unknown author.`);
-    if (!author.machines.includes(signed.signer)) {
+    if (!author.devices.includes(signed.signer)) {
       throw new TeamError(
-        `${where} is signed by a machine its author doesn't own.`,
+        `${where} is signed by a device its author doesn't own.`,
       );
     }
     const content = signedContent(signed.entry, signed.prev, signed.author);

@@ -142,8 +142,8 @@ export class RelayConnection {
         type: "hello",
         ...(scope ?? {}),
         identity: credentials.identity,
-        machine: credentials.machine.publicKey,
-        signature: signChallenge(credentials.machine, challenge, scope ?? {}),
+        device: credentials.device.publicKey,
+        signature: signChallenge(credentials.device, challenge, scope ?? {}),
       });
       connection.developer = await welcomed;
     } catch (error) {

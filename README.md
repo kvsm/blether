@@ -29,7 +29,7 @@ pnpm build
 alias blether="node $PWD/packages/bridge/dist/cli-bin.js"
 
 node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
-blether init --name Kev                # once per machine: creates your identity in ~/.blether
+blether init --name Kev                # once per device: creates your identity in ~/.blether
 blether team create backend --relay ws://127.0.0.1:7357
 blether invite backend                 # prints a one-use invite, valid for 72 hours
 ```

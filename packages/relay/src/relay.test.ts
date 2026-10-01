@@ -8,14 +8,14 @@ import {
   createIdentity,
   createInvite,
   createTeam,
-  generateMachineKey,
+  generateDeviceKey,
   parseFrame,
   signChallenge,
   verifyIdentityLog,
   verifyTeamLog,
   type Identity,
   type IdentityLog,
-  type MachineKey,
+  type DeviceKey,
   type SignedTeamEntry,
   type Signer,
   type Team,
@@ -28,18 +28,18 @@ import { startRelay, type Relay, type RelayOptions } from "./relay.js";
 type FrameOf<T extends RelayFrame["type"]> = Extract<RelayFrame, { type: T }>;
 
 interface Developer {
-  machine: MachineKey;
+  device: DeviceKey;
   identity: IdentityLog;
   signer: Signer;
 }
 
 function newDeveloper(name: string): Developer {
-  const machine = generateMachineKey();
-  const identity = createIdentity(machine, name);
+  const device = generateDeviceKey();
+  const identity = createIdentity(device, name);
   return {
-    machine,
+    device,
     identity,
-    signer: { machine, identity: verifyIdentityLog(identity) },
+    signer: { device, identity: verifyIdentityLog(identity) },
   };
 }
 
@@ -61,8 +61,8 @@ function helloFrame(scope: Scope, challenge: string, as: Developer) {
     type: "hello",
     ...scope,
     identity: as.identity,
-    machine: as.machine.publicKey,
-    signature: signChallenge(as.machine, challenge, scope),
+    device: as.device.publicKey,
+    signature: signChallenge(as.device, challenge, scope),
   };
 }
 
@@ -231,7 +231,7 @@ describe("relay", () => {
   const inTeam = (agent: string) => ({ team: ctx.team.id, agent });
 
   describe("authentication", () => {
-    it("welcomes an agent session that signs the challenge with its developer's machine", async () => {
+    it("welcomes an agent session that signs the challenge with its developer's device", async () => {
       const web = await connect();
 
       expect(await web.hello(inTeam("web"))).toEqual({
@@ -284,12 +284,12 @@ describe("relay", () => {
       });
     });
 
-    it("refuses a machine that isn't in the identity it presents", async () => {
-      const intruder = generateMachineKey();
+    it("refuses a device that isn't in the identity it presents", async () => {
+      const intruder = generateDeviceKey();
       const web = await connect();
 
       expect(
-        await web.sayHello(inTeam("web"), { ...alice, machine: intruder }),
+        await web.sayHello(inTeam("web"), { ...alice, device: intruder }),
       ).toMatchObject({ code: "authentication-failed" });
     });
 
