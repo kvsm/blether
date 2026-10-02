@@ -274,7 +274,7 @@ pnpm --filter @kvsm/blether smoke   # checks the bundled CLI and bridge run on t
 
 To use your working copy instead of the published package, run `npm install -g ./packages/blether` after `pnpm build`, then `blether claude install`.
 
-**Releasing:** bump the version in `packages/blether/package.json` and merge to `main`. The Publish workflow puts it on npm, and the Relay image workflow publishes the relay image.
+**Releasing:** run `pnpm set-version <version>`, which sets it for the npm package, the relay image, the plugin and every workspace package (a test fails if they differ), and merge to `main`. The Publish workflow puts the package on npm, and the Relay image workflow publishes the image tagged with the same version.
 
 npm publishing uses [trusted publishing](https://docs.npmjs.com/trusted-publishers): npm trusts `.github/workflows/publish.yml` in `kvsm/blether`, so no token is stored. npm only allows that for a package that already exists, so the first release used an `NPM_TOKEN` secret instead. The trusted publisher is set on the package's **Settings** page on npmjs.com (GitHub Actions, user `kvsm`, repository `blether`, workflow `publish.yml`, no environment).
 

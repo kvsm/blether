@@ -3,7 +3,6 @@
 // plugin carries everything it runs. Run after `pnpm build` (tsc).
 import {
   copyFileSync,
-  existsSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -45,7 +44,6 @@ const { metafile } = await build({
 writeNotices(metafile);
 // npm ships a LICENSE from the package's own directory.
 copyFileSync(join(here, "..", "..", "LICENSE"), join(here, "LICENSE"));
-syncPluginVersion();
 console.log(`Bundled the CLI and bridge into ${out}`);
 
 /** Collects the licence of every third-party package in the bundles. */
@@ -81,21 +79,5 @@ function writeNotices(meta) {
   writeFileSync(
     join(out, "THIRD-PARTY-NOTICES.txt"),
     `The bundled CLI and bridge include these packages.\n\n${sections.join(`\n\n${"-".repeat(72)}\n\n`)}\n`,
-  );
-}
-
-/** Keeps the plugin's version the same as the package's. */
-function syncPluginVersion() {
-  const { version } = JSON.parse(
-    readFileSync(join(here, "package.json"), "utf8"),
-  );
-  const manifest = join(here, "plugin", ".claude-plugin", "plugin.json");
-  if (!existsSync(manifest)) return;
-  const plugin = JSON.parse(readFileSync(manifest, "utf8"));
-  if (plugin.version === version) return;
-  const { name, ...rest } = plugin;
-  writeFileSync(
-    manifest,
-    `${JSON.stringify({ name, version, ...rest }, null, 2)}\n`,
   );
 }

@@ -39,7 +39,7 @@ jobs:
       - name: Version
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: version
-        run: echo "version=$(node -p "require('./packages/relay/package.json').version")" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p "require('./packages/blether/package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Tags
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

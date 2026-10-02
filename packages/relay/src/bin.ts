@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { RELAY_ENV, RelayConfigError, relayConfig } from "./config.js";
 import { IncompatibleDatabaseError, backUpDatabase } from "./mailbox-store.js";
+import { BLETHER_VERSION } from "@blether/protocol";
 import { startRelay } from "./relay.js";
 
 const USAGE = `Usage: blether-relay [command]
@@ -63,7 +64,7 @@ async function serve() {
     log: (line) => console.error(line),
   });
   console.error(
-    `blether relay listening on ${relay.url}, mailboxes in ${config.databasePath}\n` +
+    `blether relay ${BLETHER_VERSION} listening on ${relay.url}, mailboxes in ${config.databasePath}\n` +
       "Messages are end-to-end encrypted: this relay sees who messaged whom, and when, never what they said." +
       (config.tls
         ? ""
