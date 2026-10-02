@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   AgentName,
   Attachment,
+  BLETHER_VERSION,
   MAX_ATTACHMENTS,
   MAX_MESSAGE_CHARS,
   type Audience,
@@ -95,7 +96,7 @@ export function createSetupProblemServer(
 ): McpServer {
   const explanation = `Blether isn't working in this session: ${problem}`;
   const server = new McpServer(
-    { name: "blether", version: "0.0.0" },
+    { name: "blether", version: BLETHER_VERSION },
     {
       instructions:
         `${explanation} Blether's messaging tools are unavailable until this is fixed. ` +
@@ -173,7 +174,7 @@ export function createBridgeServer(
   const server =
     existing ??
     new McpServer(
-      { name: "blether", version: "0.0.0" },
+      { name: "blether", version: BLETHER_VERSION },
       {
         instructions: [
           INSTRUCTIONS,

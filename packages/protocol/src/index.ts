@@ -7,4 +7,5 @@ export * from "./logs.js";
 export * from "./names.js";
 export * from "./pairing.js";
 export * from "./team.js";
+export * from "./version.js";
 export * from "./wire.js";
