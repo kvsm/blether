@@ -21,6 +21,7 @@ import {
 } from "@blether/protocol";
 import { WebSocketServer, type WebSocket } from "ws";
 import { MailboxStore } from "./mailbox-store.js";
+import { RelayStats } from "./stats.js";
 
 export interface RelayOptions {
   /** Port to listen on. 0 picks a free port. */
@@ -42,8 +43,21 @@ export interface RelayOptions {
    * TLS in front of it, or for local development.
    */
   tls?: { cert: string; key: string };
-  /** Where to report things the operator should know, such as database migrations. */
+  /** Where to report things the operator should know: database migrations, and message statistics. */
   log?: (line: string) => void;
+  /**
+   * How often to print message statistics to `log`, when there are new
+   * messages, as well as once on shutdown. 0 prints only on shutdown.
+   * Defaults to 5 minutes.
+   */
+  statsIntervalMs?: number;
+  /**
+   * Debug mode: ask bridges to say whether each send went to one agent, a
+   * role, or everyone, so the statistics can count role messages and
+   * broadcasts. Off by default, since it tells the relay more than it
+   * otherwise sees.
+   */
+  debugAudience?: boolean;
 }
 
 export interface Relay {
@@ -104,6 +118,20 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
       resolve();
     });
   });
+
+  const debugAudience = options.debugAudience === true;
+  const stats = new RelayStats(now(), debugAudience);
+  const { log } = options;
+  const statsTimer =
+    log && (options.statsIntervalMs ?? 5 * 60_000) > 0
+      ? setInterval(
+          () => {
+            if (stats.changed) log(stats.report());
+          },
+          options.statsIntervalMs ?? 5 * 60_000,
+        )
+      : undefined;
+  statsTimer?.unref();
 
   const sessions = new Map<string, WebSocket>();
   /** The developer behind each agent session, by session key. */
@@ -307,6 +335,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
           developer: identity.id,
           identity: identityLog,
           ...(scope ? { team: scope.team, agent: scope.agent } : {}),
+          ...(scope && debugAudience ? { audienceHints: true } : {}),
         });
         if (scope) {
           for (const message of store.unread(scope.team, scope.agent)) {
@@ -497,6 +526,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             );
             return;
           }
+          stats.record(scope.team, team.name, frame.to, frame.hint);
           const recipient = sessions.get(
             sessionKey({ team: scope.team, agent: frame.to }),
           );
@@ -559,6 +589,8 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     close: () =>
       new Promise<void>((resolve, reject) => {
         clearInterval(heartbeat);
+        clearInterval(statsTimer);
+        if (log && stats.any) log(stats.report());
         for (const client of wss.clients) client.terminate();
         wss.close();
         http.close((err) => {

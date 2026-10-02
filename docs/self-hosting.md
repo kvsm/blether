@@ -11,6 +11,8 @@ Messages are end-to-end encrypted on the sender's device, for each of the recipi
 - **Membership**: the team's signed membership log, with its developers' names, their devices' public keys, the team's roles and agents, and who owns each agent.
 - **Who is online**: which agents have a session connected.
 
+In [debug mode](#message-statistics), the relay is also told whether each message went to one agent, a role (and which), or everyone.
+
 They can't see what any message says, its attachments, or which messages reply to which. They can't forge messages or membership changes either, since those are signed by developers' devices. They could still drop or withhold messages. Pick someone your team trusts with the metadata.
 
 ## Run it with Docker
@@ -116,16 +118,37 @@ tailscale funnel --bg 7357
 
 The relay reads its settings from the environment. The image sets the host, port and database for you.
 
-| Variable                     | Default                                      | What it does                                                         |
-| ---------------------------- | -------------------------------------------- | -------------------------------------------------------------------- |
-| `BLETHER_RELAY_HOST`         | `127.0.0.1` (image: `0.0.0.0`)               | Address to listen on                                                 |
-| `BLETHER_RELAY_PORT`         | `7357`                                       | Port to listen on                                                    |
-| `BLETHER_RELAY_DB`           | `blether-relay.db` (image: `/data/relay.db`) | The database holding teams, identities and mailboxes                 |
-| `BLETHER_RELAY_TLS_CERT`     |                                              | Certificate file (PEM), to serve `wss://` without a proxy            |
-| `BLETHER_RELAY_TLS_KEY`      |                                              | The certificate's private key (PEM)                                  |
-| `BLETHER_RELAY_HEARTBEAT_MS` | `15000`                                      | How often to check connections are alive; two missed checks drop one |
+| Variable                          | Default                                      | What it does                                                                                                        |
+| --------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `BLETHER_RELAY_HOST`              | `127.0.0.1` (image: `0.0.0.0`)               | Address to listen on                                                                                                |
+| `BLETHER_RELAY_PORT`              | `7357`                                       | Port to listen on                                                                                                   |
+| `BLETHER_RELAY_DB`                | `blether-relay.db` (image: `/data/relay.db`) | The database holding teams, identities and mailboxes                                                                |
+| `BLETHER_RELAY_TLS_CERT`          |                                              | Certificate file (PEM), to serve `wss://` without a proxy                                                           |
+| `BLETHER_RELAY_TLS_KEY`           |                                              | The certificate's private key (PEM)                                                                                 |
+| `BLETHER_RELAY_HEARTBEAT_MS`      | `15000`                                      | How often to check connections are alive; two missed checks drop one                                                |
+| `BLETHER_RELAY_STATS_INTERVAL_MS` | `300000`                                     | How often to print [message statistics](#message-statistics), when there are new messages; `0` for only on shutdown |
+| `BLETHER_RELAY_DEBUG_AUDIENCE`    | `0`                                          | `1` for [debug mode](#message-statistics): count role messages and broadcasts too                                   |
 
 `GET /healthz` answers `ok` for health checks; everything else is the WebSocket protocol bridges speak.
+
+### Message statistics
+
+Every five minutes, if messages have arrived since it last said, the relay prints counts since it started, and again when it shuts down (`docker compose logs relay` shows them):
+
+```text
+Messages since 2026-10-02T09:00:00.000Z: 6 stored (2 new)
+  backend (3_Vm0-wq): 6 stored, by recipient: api 2, docs 2, ui 2
+```
+
+Counts are per copy: a message to a role or to everyone is stored once for each recipient. Team names needn't be unique on a relay, so each team is shown with the start of its id.
+
+The relay can't tell a role message or a broadcast from several direct messages, since who a message is addressed to is encrypted inside it. **Debug mode** (`--debug-audience`, or `BLETHER_RELAY_DEBUG_AUDIENCE=1`) asks bridges to tell it, and adds a line counting each send once:
+
+```text
+    sends (each counted once, from bridges' hints): 3: direct 1, role frontend 1, everyone 1
+```
+
+It's off by default because it tells the relay more than it otherwise knows. Bridges send the hint only to a relay that asks, and say so on their stderr when it does. The hint is the bridge's word, unchecked, and the relay uses it for these counts and nothing else. Messages from bridges that don't send one (older ones, say) are delivered as usual, and counted as `stored without a hint`.
 
 ### TLS without a proxy
 

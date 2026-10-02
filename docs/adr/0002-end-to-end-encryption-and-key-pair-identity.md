@@ -13,3 +13,4 @@ Messages carry code context between developers' devices through a relay that a t
 - Everything that inspects a message's content happens on the developer's device. That includes the secret check on outgoing messages and the assessment of incoming ones. The relay can't help with either.
 - Messages to a role and broadcasts are encrypted separately for each recipient. A developer leaving the team, or a key changing, affects who can read future messages.
 - Losing a key means losing the identity. Key recovery and rotation still need designing.
+- A relay operator can opt in to being told slightly more, for statistics: in debug mode, bridges tell the relay whether each send went to one agent, a role (naming it) or everyone, and which copies belong to one send. It's off unless the relay is started with `--debug-audience`, and bridges announce it to their developer when it's on. See [`docs/self-hosting.md`](../self-hosting.md#message-statistics).

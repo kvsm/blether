@@ -6,7 +6,10 @@ import { startRelay } from "./relay.js";
 const USAGE = `Usage: blether-relay [command]
 
 Commands:
-  serve            Run the relay (the default)
+  serve [--debug-audience]
+                   Run the relay (the default). --debug-audience asks bridges whether each
+                   message went to one agent, a role, or everyone, to count role messages
+                   and broadcasts (the same as BLETHER_RELAY_DEBUG_AUDIENCE=1)
   backup <file>    Write a consistent copy of the database to <file>; safe while the relay runs
 
 Environment:
@@ -14,7 +17,11 @@ ${Object.entries(RELAY_ENV)
   .map(([name, about]) => `  ${name.padEnd(28)}${about}`)
   .join("\n")}`;
 
-const [command = "serve", ...args] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const debugAudience = argv.includes("--debug-audience");
+const [command = "serve", ...args] = argv.filter(
+  (a) => a !== "--debug-audience",
+);
 
 try {
   switch (command) {
@@ -50,6 +57,7 @@ try {
 
 async function serve() {
   const config = relayConfig(process.env);
+  if (debugAudience) config.debugAudience = true;
   const relay = await startRelay({
     ...config,
     log: (line) => console.error(line),
@@ -59,7 +67,10 @@ async function serve() {
       "Messages are end-to-end encrypted: this relay sees who messaged whom, and when, never what they said." +
       (config.tls
         ? ""
-        : "\nServing plain ws://: put a TLS proxy in front, or set BLETHER_RELAY_TLS_CERT and BLETHER_RELAY_TLS_KEY, before exposing it."),
+        : "\nServing plain ws://: put a TLS proxy in front, or set BLETHER_RELAY_TLS_CERT and BLETHER_RELAY_TLS_KEY, before exposing it.") +
+      (config.debugAudience
+        ? "\nDebug mode: asking bridges whether each message went to one agent, a role, or everyone, for the statistics."
+        : ""),
   );
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.once(signal, () => void relay.close().then(() => process.exit(0)));

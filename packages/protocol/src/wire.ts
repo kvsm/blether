@@ -1,9 +1,21 @@
 import { z } from "zod";
 import { PublicKey, Signature } from "./crypto.js";
-import { Envelope } from "./envelope.js";
+import { Audience, Envelope } from "./envelope.js";
 import { IdentityLog } from "./identity.js";
 import { AgentName } from "./names.js";
 import { SignedTeamEntry, TeamLog } from "./team.js";
+
+/**
+ * Who a send was addressed to, told to a relay that asked for it (in its
+ * welcome) so it can count role messages and broadcasts. Unverified: the
+ * relay uses it for statistics and nothing else. `fanout` is shared by every
+ * copy of one send, so the relay can count the send once.
+ */
+export const AudienceHint = z.object({
+  audience: z.union([z.object({ kind: z.literal("agent") }), Audience]),
+  fanout: z.uuid(),
+});
+export type AudienceHint = z.infer<typeof AudienceHint>;
 
 /**
  * Frames exchanged between a bridge and the relay over a WebSocket, one JSON
@@ -76,6 +88,8 @@ export const ClientFrame = z.discriminatedUnion("type", [
     id: z.uuid(),
     to: AgentName,
     envelope: Envelope,
+    /** Only when the relay asked for hints. A malformed one is dropped, never the message. */
+    hint: AudienceHint.optional().catch(undefined),
   }),
   /** The agent has read these messages from its mailbox. */
   z.object({ type: z.literal("read"), ids: z.array(z.uuid()).min(1) }),
@@ -148,6 +162,8 @@ export const RelayFrame = z.discriminatedUnion("type", [
      * have added a device since).
      */
     identity: IdentityLog,
+    /** Set when the relay runs in debug mode and wants an AudienceHint with each send. */
+    audienceHints: z.boolean().optional(),
   }),
   /** The relay accepted the `send` frame with this id. */
   z.object({
