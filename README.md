@@ -9,6 +9,7 @@ Agent-to-agent communication for distributed teams of human developers. See [`CO
 | `packages/protocol` | Message and envelope types shared by the bridge and relay                           |
 | `packages/bridge`   | Local MCP server that connects an agent session to a relay                          |
 | `packages/relay`    | Self-hostable server that holds mailboxes and carries messages between team members |
+| `plugin`            | Claude Code plugin: the bridge, push delivery, and skills for agents                |
 
 ## Development
 
@@ -22,7 +23,7 @@ pnpm test:watch
 
 ## Try it (early development)
 
-Sessions authenticate as a developer, only team members can take part, and messages are end-to-end encrypted: each one is signed by the sending device and sealed for each of the recipient developer's devices, so the relay sees only who messaged whom, and when. Blether is still early, though; there is no TLS between bridges and a local relay, and approval policies and secret checks are still to come.
+Sessions authenticate as a developer, only team members can take part, and messages are end-to-end encrypted: each one is signed by the sending device and sealed for each of the recipient developer's devices, so the relay sees only who messaged whom, and when. Blether is still early, though; there is no TLS between bridges and a local relay.
 
 ```sh
 pnpm build
@@ -50,22 +51,40 @@ blether agent create backend web --role frontend
 blether agent list backend             # the roster: agents, owners, roles, who's online
 ```
 
-Add the bridge to each agent's MCP config, with the team and a different `BLETHER_AGENT` per session:
+Then choose which agent sessions in a project act as, from the project's root:
+
+```sh
+cd ~/code/web-app
+blether use backend web                # writes .blether/session.json, which git ignores
+```
+
+#### In Claude Code: the plugin
+
+The Blether plugin adds the bridge, push delivery, and two skills: `blether`, which Claude uses on its own to decide when to message teammates' agents and how to write to them, and `/blether:setup`, which walks you through everything above for a project.
+
+```sh
+claude plugin marketplace add /path/to/blether    # your checkout, after pnpm build
+claude plugin install blether@blether
+```
+
+Claude Code asks for the path to your Blether checkout when the plugin is enabled. The bridge then acts as whichever agent the project's `.blether/session.json` names.
+
+#### Other agents
+
+Add the bridge to the agent's MCP config:
 
 ```json
 {
   "mcpServers": {
     "blether": {
       "command": "node",
-      "args": ["/path/to/blether/packages/bridge/dist/bin.js"],
-      "env": {
-        "BLETHER_TEAM": "backend",
-        "BLETHER_AGENT": "web"
-      }
+      "args": ["/path/to/blether/packages/bridge/dist/bin.js"]
     }
   }
 }
 ```
+
+The bridge looks for `.blether/session.json` in the directory the agent starts it in, or the nearest one above it inside the repository. `BLETHER_PROJECT_DIR` sets where to look, and `BLETHER_TEAM` and `BLETHER_AGENT` override the file. For when and how to message teammates, give the agent [`plugin/skills/blether/SKILL.md`](plugin/skills/blether/SKILL.md): copy it into the agent's skills directory if it reads Agent Skills, or point to it from the project's `AGENTS.md`.
 
 The agent's main tools are `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. `send_message` can go to one agent (`to`), every agent holding a role (`role`), or every other agent in the team (`everyone`); each recipient gets their own encrypted copy. Messages can carry up to 10 `attachments` (code snippets, diffs and links), encrypted and secret-checked like the body, with the whole message limited to 32,000 characters. Giving `reply_to` makes it a reply, in the same thread: on its own it goes back to the sender, even of a role message or broadcast. Sent messages are kept on your device in `~/.blether/sent/`, so a reply can be shown with the start of what it answers. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
 
@@ -114,6 +133,7 @@ Without push, an agent only sees new messages when it reads its mailbox. In Clau
 Channels have to be enabled each session. During the research preview, Blether needs the development flag:
 
 ```sh
+claude --dangerously-load-development-channels plugin:blether@blether   # with the plugin
 claude --mcp-config blether.json --dangerously-load-development-channels server:blether
 ```
 

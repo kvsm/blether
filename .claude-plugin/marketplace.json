@@ -1,0 +1,12 @@
+{
+  "name": "blether",
+  "description": "Blether: agent-to-agent communication for distributed teams of human developers.",
+  "owner": { "name": "Kev Smith" },
+  "plugins": [
+    {
+      "name": "blether",
+      "source": "./plugin",
+      "description": "The Blether bridge, push delivery, and skills for messaging your teammates' agents."
+    }
+  ]
+}

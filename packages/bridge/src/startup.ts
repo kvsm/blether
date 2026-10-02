@@ -12,6 +12,7 @@ import {
 import { EscalationStore } from "./escalations.js";
 import { PolicyStore } from "./policy.js";
 import { SentLog } from "./sent-log.js";
+import { SessionFileError, findSessionFile } from "./session-file.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer, createSetupProblemServer } from "./server.js";
 
@@ -31,7 +32,7 @@ const REFUSAL_FIXES: Partial<
   Record<string, (agent: string, team: string) => string>
 > = {
   "agent-in-use": (agent) =>
-    `Only one session can act as ${agent} at a time. If the other one is still in use, close it (it may be in another terminal, or on another of your devices) or set a different BLETHER_AGENT for this session. If this session should be ${agent} instead, use take_over_agent.`,
+    `Only one session can act as ${agent} at a time. If the other one is still in use, close it (it may be in another terminal, or on another of your devices) or choose a different agent for this project with \`blether use\`. If this session should be ${agent} instead, use take_over_agent.`,
   "agent-owned-by-another": (agent, team) =>
     `${agent} is another developer's agent. Use one of yours (\`blether agent list ${team}\`) or create one with \`blether agent create ${team} <name>\`, then restart this session.`,
   "not-a-member": () =>
@@ -45,8 +46,10 @@ const REFUSAL_FIXES: Partial<
 };
 
 /**
- * Starts the bridge for the session described by `env` (BLETHER_TEAM,
- * BLETHER_AGENT and BLETHER_HOME). If anything stops it working (no
+ * Starts the bridge for the session described by `env`: BLETHER_TEAM and
+ * BLETHER_AGENT, or else the project's `.blether/session.json` (looked for
+ * from BLETHER_PROJECT_DIR, or the working directory), and BLETHER_HOME.
+ * If anything stops it working (no
  * identity, an unknown team, a relay that refuses or can't be reached), it
  * still returns an MCP server: one whose only job is to explain the problem,
  * so the agent can tell the developer instead of the host just showing
@@ -103,13 +106,28 @@ export interface StartedBridge {
 }
 
 async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
-  const agent = AgentName.safeParse(env.BLETHER_AGENT);
-  if (!agent.success) {
+  const home = env.BLETHER_HOME ?? defaultBletherHome();
+  let session;
+  try {
+    session = findSessionFile(env.BLETHER_PROJECT_DIR ?? process.cwd(), home);
+  } catch (error) {
+    if (!(error instanceof SessionFileError)) throw error;
+    throw new SetupProblem(error.message);
+  }
+  const agentName = env.BLETHER_AGENT ?? session?.contents.agent;
+  if (agentName === undefined) {
     throw new SetupProblem(
-      "BLETHER_AGENT isn't set to an agent name (lowercase letters, digits and hyphens). Set it in this agent's MCP config.",
+      "No agent is chosen for this project. Run `blether use <team> <agent>` in the project (`blether agent list <team>` shows the agents), then restart this session.",
     );
   }
-  const store = new FileKeyStore(env.BLETHER_HOME ?? defaultBletherHome());
+  const agent = AgentName.safeParse(agentName);
+  if (!agent.success) {
+    throw new SetupProblem(
+      `BLETHER_AGENT is set to "${agentName}", which isn't an agent name (lowercase letters, digits and hyphens). Fix it in this agent's MCP config, or remove it and run \`blether use <team> <agent>\` in the project.`,
+    );
+  }
+  if (session) log(`blether bridge using ${session.path}`);
+  const store = new FileKeyStore(home);
   let credentials;
   try {
     credentials = store.load();
@@ -121,10 +139,10 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
       `There's no Blether identity in ${store.home}. Run \`blether init --name "<your name>"\`, or \`blether device request\` to add this device to an existing identity.`,
     );
   }
-  const teamName = env.BLETHER_TEAM;
+  const teamName = env.BLETHER_TEAM ?? session?.contents.team;
   if (!teamName) {
     throw new SetupProblem(
-      "BLETHER_TEAM isn't set. Set it in this agent's MCP config to one of the teams `blether team list` shows.",
+      "No team is chosen for this project. Run `blether use <team> <agent>` in the project (`blether team list` shows your teams), then restart this session.",
     );
   }
   let team;
