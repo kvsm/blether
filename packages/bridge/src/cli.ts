@@ -54,6 +54,12 @@ import {
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { writeSessionFile } from "./session-file.js";
 import {
+  HOOK_EVENTS,
+  hookOutput,
+  projectInboxPath,
+  watchInbox,
+} from "./watch.js";
+import {
   PLUGIN_ID,
   installClaudePlugin,
   packageRoot,
@@ -92,6 +98,8 @@ Commands:
   agent delete <team> <name>         Delete one of your agents (or any, as Team Admin)
   use <team> <agent> [--dir <path>]  Make sessions started in this project (or <path>) act as <agent>
   claude install                     Install (or update) the Blether plugin in Claude Code
+  watch [--dir <path>]               Print a line whenever this project's agent gets mail (for a plugin monitor)
+  hook <event>                       Answer a Claude Code hook (UserPromptSubmit, SessionStart) with the unread count
   escalations                        List messages your agents are holding for your decision
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
@@ -118,6 +126,8 @@ export interface CliContext {
   now?: () => Date;
   /** Where `blether use` writes by default. Defaults to the working directory. */
   cwd?: string;
+  /** Reads standard input, for `blether hook`. */
+  readStdin?: () => Promise<string>;
   /** Runs the `claude` CLI, for `blether claude install`. */
   claude?: ClaudeRunner;
   /** The installed package's root, for `blether claude install`. Found from this file by default. */
@@ -140,6 +150,7 @@ export async function runCli(
     ...(context.now ? { now: context.now } : {}),
     ...(context.cwd ? { cwd: context.cwd } : {}),
     ...(context.claude ? { claude: context.claude } : {}),
+    ...(context.readStdin ? { readStdin: context.readStdin } : {}),
     ...("packageRoot" in context ? { packageRoot: context.packageRoot } : {}),
   };
   try {
@@ -222,6 +233,10 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
     }
     case "use":
       return use(rest, ctx);
+    case "watch":
+      return watch(rest, ctx);
+    case "hook":
+      return hook(rest, ctx);
     case "claude": {
       const [sub] = rest;
       if (sub === "install") return claudeInstall(ctx);
@@ -934,6 +949,65 @@ async function agentDelete(args: string[], ctx: CliContext): Promise<number> {
     `Deleted agent ${name} from ${record.name}. Unread messages to it are lost, and their senders will be told. The name can be used again.`,
   );
   return 0;
+}
+
+async function watch(args: string[], ctx: CliContext): Promise<number> {
+  const { values } = parseArgs({ args, options: { dir: { type: "string" } } });
+  const dir = values.dir ?? ctx.cwd ?? process.cwd();
+  const find = () => projectInboxPath(dir, ctx.store.home, ctx.teams);
+  let stop = () => {};
+  // Until `blether use` chooses an agent there's nothing to watch: wait
+  // quietly (on stderr, which isn't a notification) and check again.
+  let path = find();
+  if (!path) {
+    ctx.io.err(
+      "No Blether agent is chosen for this project yet (`blether use <team> <agent>`); waiting.",
+    );
+  }
+  const waiting = setInterval(() => {
+    if (path) return;
+    path = find();
+    if (path) stop = watchInbox(path, ctx.io.out);
+  }, 5000);
+  if (path) stop = watchInbox(path, ctx.io.out);
+  await new Promise<void>((resolve) => {
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      process.once(signal, () => resolve());
+    }
+  });
+  clearInterval(waiting);
+  stop();
+  return 0;
+}
+
+async function hook(args: string[], ctx: CliContext): Promise<number> {
+  const event = HOOK_EVENTS.find((e) => e === args[0]);
+  if (!event) {
+    throw new CliError(`Usage: blether hook <${HOOK_EVENTS.join(" | ")}>`);
+  }
+  // Claude Code passes the hook's input, including the session's directory.
+  let cwd = ctx.cwd ?? process.cwd();
+  try {
+    const input = JSON.parse(
+      (await (ctx.readStdin ?? readAllStdin)()) || "{}",
+    ) as { cwd?: unknown };
+    if (typeof input.cwd === "string") cwd = input.cwd;
+  } catch {
+    // No usable input: use the working directory.
+  }
+  const output = hookOutput(
+    event,
+    projectInboxPath(cwd, ctx.store.home, ctx.teams),
+  );
+  if (output) ctx.io.out(output);
+  return 0;
+}
+
+async function readAllStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  let text = "";
+  for await (const chunk of process.stdin) text += String(chunk);
+  return text;
 }
 
 async function claudeInstall(ctx: CliContext): Promise<number> {

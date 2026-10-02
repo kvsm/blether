@@ -1,0 +1,7 @@
+[
+  {
+    "name": "mailbox",
+    "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/cli.js\" watch",
+    "description": "New Blether messages for this project's agent"
+  }
+]
