@@ -11,6 +11,7 @@ import {
   verifyIdentityLog,
   verifyTeamLog,
   type AgentName,
+  type Attachment,
   type Audience,
   type ClientFrame,
   type DeliveryStatus,
@@ -89,6 +90,7 @@ export interface ReceivedMessage {
   inReplyTo?: string | undefined;
   /** The thread it belongs to: the id of the message that started it (its own id if it starts one). */
   thread: string;
+  attachments?: Attachment[] | undefined;
   body: string;
   /** When the sender sent it, by the sender's signed clock. */
   sentAt: string;
@@ -304,11 +306,13 @@ export class RelayConnection {
       kind,
       inReplyTo,
       thread,
+      attachments,
     }: {
       audience?: Audience | undefined;
       kind?: "hold-notice";
       inReplyTo?: string | undefined;
       thread?: string | undefined;
+      attachments?: Attachment[] | undefined;
     } = {},
   ): Promise<SendReceipt> {
     const scope = this.requireScope();
@@ -337,6 +341,7 @@ export class RelayConnection {
         ...(kind ? { kind } : {}),
         ...(inReplyTo ? { inReplyTo } : {}),
         ...(thread ? { thread } : {}),
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
         body,
         sentAt: new Date().toISOString(),
       },
@@ -660,6 +665,7 @@ export class RelayConnection {
       inReplyTo: payload.inReplyTo,
       thread: payload.thread ?? payload.id,
       body: payload.body,
+      attachments: payload.attachments,
       sentAt: payload.sentAt,
       receivedAt: message.receivedAt,
     };

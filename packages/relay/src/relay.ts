@@ -68,6 +68,9 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const wss = new WebSocketServer({
     port: options.port ?? 0,
     host: options.host ?? "127.0.0.1",
+    // Generous for a 32,000-character message sealed for many devices,
+    // and a bound on what any one frame can make the relay hold.
+    maxPayload: 8 * 1024 * 1024,
   });
   await new Promise<void>((resolve, reject) => {
     wss.once("listening", resolve);
