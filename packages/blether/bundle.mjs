@@ -2,6 +2,7 @@
 // plugin, so the npm package needs no dependencies of its own, and the
 // plugin carries everything it runs. Run after `pnpm build` (tsc).
 import {
+  copyFileSync,
   existsSync,
   readFileSync,
   readdirSync,
@@ -42,6 +43,8 @@ const { metafile } = await build({
 });
 
 writeNotices(metafile);
+// npm ships a LICENSE from the package's own directory.
+copyFileSync(join(here, "..", "..", "LICENSE"), join(here, "LICENSE"));
 syncPluginVersion();
 console.log(`Bundled the CLI and bridge into ${out}`);
 

@@ -1,10 +1,15 @@
 name: Publish
 
 # Publishes @kvsm/blether to npm when main has a version that isn't published
-# yet. Bump packages/blether/package.json's version to release.
+# yet. Bump packages/blether/package.json's version to release. On pull
+# requests that touch the package, it only checks the npm token works.
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/publish.yml
+      - packages/blether/**
 
 jobs:
   npm:
@@ -20,6 +25,23 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      - name: Check the npm token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "::error::The NPM_TOKEN secret isn't set."
+            exit 1
+          fi
+          user=$(npm whoami) || {
+            echo "::error::npm rejected NPM_TOKEN: it may be mistyped, expired or revoked."
+            exit 1
+          }
+          echo "NPM_TOKEN authenticates as npm user: $user"
+          if [ "$user" != "kvsm" ]; then
+            echo "::warning::NPM_TOKEN belongs to $user, not kvsm: it can publish to @kvsm only if $user is a member of the kvsm organisation."
+          fi
+
       - name: Unpublished version?
         id: version
         run: |
@@ -30,16 +52,23 @@ jobs:
             echo "@kvsm/blether@$version is already published."
           else
             echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "@kvsm/blether@$version isn't published yet."
           fi
 
-      - if: steps.version.outputs.publish == 'true'
+      - name: Build and smoke-test
         run: |
           pnpm install --frozen-lockfile
           pnpm build
           pnpm --filter @kvsm/blether smoke
 
       - name: Publish
-        if: steps.version.outputs.publish == 'true'
+        if: github.event_name == 'push' && steps.version.outputs.publish == 'true'
         run: pnpm --filter @kvsm/blether publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: What would be published
+        if: github.event_name == 'pull_request'
+        run: pnpm --filter @kvsm/blether publish --dry-run --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

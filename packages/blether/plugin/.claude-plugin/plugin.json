@@ -7,6 +7,7 @@
     "name": "Kev Smith"
   },
   "repository": "https://github.com/kvsm/blether",
+  "license": "MIT",
   "keywords": ["collaboration", "messaging", "agents", "mcp"],
   "mcpServers": {
     "blether": {

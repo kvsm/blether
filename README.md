@@ -275,3 +275,7 @@ pnpm --filter @kvsm/blether smoke   # checks the bundled CLI and bridge run on t
 To use your working copy instead of the published package, run `npm install -g ./packages/blether` after `pnpm build`, then `blether claude install`.
 
 **Releasing:** bump the version in `packages/blether/package.json` and merge to `main`; the Publish workflow puts it on npm (it needs an `NPM_TOKEN` secret), and the Relay image workflow publishes the relay image.
+
+## License
+
+[MIT](LICENSE)

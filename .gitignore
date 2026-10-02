@@ -5,3 +5,4 @@ coverage/
 .vscode/
 blether-relay.db*
 packages/blether/plugin/dist/
+packages/blether/LICENSE
