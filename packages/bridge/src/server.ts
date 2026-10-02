@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   AgentName,
   Attachment,
@@ -329,9 +330,11 @@ export function createBridgeServer(
         if (approval !== "approved") {
           return respond(`Not sent: ${approval}`, true);
         }
+        const fanout = randomUUID();
         const sendOne = async (recipient: string) => {
           const receipt = await relay.send(recipient, body, {
             audience,
+            fanout,
             inReplyTo,
             thread,
             attachments,

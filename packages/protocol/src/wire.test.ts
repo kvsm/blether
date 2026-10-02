@@ -25,6 +25,29 @@ describe("parseFrame", () => {
     expect(frame).toEqual({ type: "send", id, to: "api", envelope });
   });
 
+  it("keeps a send with an audience hint", () => {
+    const hint = { audience: { kind: "role", role: "frontend" }, fanout: id };
+    const frame = parseFrame(
+      ClientFrame,
+      JSON.stringify({ type: "send", id, to: "api", envelope, hint }),
+    );
+    expect(frame).toEqual({ type: "send", id, to: "api", envelope, hint });
+  });
+
+  it("drops a malformed audience hint but keeps the send", () => {
+    const frame = parseFrame(
+      ClientFrame,
+      JSON.stringify({
+        type: "send",
+        id,
+        to: "api",
+        envelope,
+        hint: { audience: { kind: "team-of-one" }, fanout: "nope" },
+      }),
+    );
+    expect(frame).toEqual({ type: "send", id, to: "api", envelope });
+  });
+
   it("returns undefined for invalid JSON", () => {
     expect(parseFrame(ClientFrame, "{nope")).toBeUndefined();
   });

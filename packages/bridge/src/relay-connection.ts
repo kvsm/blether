@@ -13,6 +13,7 @@ import {
   type AgentName,
   type Attachment,
   type Audience,
+  type AudienceHint,
   type ClientFrame,
   type DeliveryStatus,
   type ErrorCode,
@@ -68,6 +69,8 @@ export interface ConnectOptions {
   readMessages?: ReadMessageLog;
   /** If another session is acting as the agent, disconnect it and take its place. */
   takeover?: boolean;
+  /** Where to tell the developer things about the connection, such as the relay asking for audience hints. */
+  log?: (line: string) => void;
 }
 
 /** Who a message is for: one agent, every agent holding a role, or every other agent in the team. */
@@ -131,6 +134,7 @@ export type MailboxItem = ReceivedMessage | UnreadableMessage | LostMessage;
 interface Welcome {
   developer: string;
   identity: IdentityLog;
+  audienceHints?: boolean | undefined;
 }
 
 /** One agent in a team's roster. */
@@ -187,6 +191,8 @@ export class RelayConnection {
   private readonly presenceRequests = new Map<string, Pending<string[]>>();
   private challenge: Pending<string> | undefined;
   private welcome: Pending<Welcome> | undefined;
+  /** Whether the relay asked to be told each send's audience (debug statistics). */
+  private audienceHints = false;
   /** The authenticated developer's identity id, once the relay has welcomed this session. */
   developer: string | undefined;
   /**
@@ -244,7 +250,7 @@ export class RelayConnection {
   static async connect(
     url: string,
     credentials: Credentials,
-    { scope, witness, readMessages, takeover }: ConnectOptions = {},
+    { scope, witness, readMessages, takeover, log }: ConnectOptions = {},
   ): Promise<RelayConnection> {
     const socket = new WebSocket(url);
     // Attach the frame handler at once: the relay sends its challenge as soon
@@ -286,6 +292,12 @@ export class RelayConnection {
         welcome.identity,
       );
       connection.developer = welcome.developer;
+      connection.audienceHints = welcome.audienceHints === true;
+      if (connection.audienceHints) {
+        log?.(
+          `The relay at ${url} is in debug mode and asked for audience hints: it will be told whether each message goes to one agent, a role, or everyone, for its statistics.`,
+        );
+      }
     } catch (error) {
       socket.close();
       throw error;
@@ -303,12 +315,15 @@ export class RelayConnection {
     body: string,
     {
       audience,
+      fanout,
       kind,
       inReplyTo,
       thread,
       attachments,
     }: {
       audience?: Audience | undefined;
+      /** Shared by every copy of one send to several agents, for a relay that asks for audience hints. */
+      fanout?: string | undefined;
       kind?: "hold-notice";
       inReplyTo?: string | undefined;
       thread?: string | undefined;
@@ -348,7 +363,16 @@ export class RelayConnection {
       this.credentials.device,
       devices,
     );
-    return this.request(this.sends, id, { type: "send", id, to, envelope });
+    const hint: AudienceHint | undefined = this.audienceHints
+      ? { audience: audience ?? { kind: "agent" }, fanout: fanout ?? id }
+      : undefined;
+    return this.request(this.sends, id, {
+      type: "send",
+      id,
+      to,
+      envelope,
+      ...(hint ? { hint } : {}),
+    });
   }
 
   /**

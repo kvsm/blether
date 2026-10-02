@@ -82,6 +82,7 @@ export function device(root: string, name: string) {
         client: clientOptions,
         now,
         scanSecrets,
+        log,
       }: {
         policy?: ApprovalPolicy;
         client?: ClientOptions;
@@ -89,13 +90,15 @@ export function device(root: string, name: string) {
         now?: () => Date;
         /** Replaces the bridge's secret scanner. */
         scanSecrets?: SecretScanner;
+        /** Where the bridge tells its developer things about the connection. */
+        log?: (line: string) => void;
       } = {},
     ) {
       const record = teams.get(team)!;
       const connection = await RelayConnection.connect(
         record.relayUrl,
         store.load()!,
-        { scope: { team: record.id, agent } },
+        { scope: { team: record.id, agent }, ...(log ? { log } : {}) },
       );
       const client = new Client(
         { name: agent, version: "0.0.0" },

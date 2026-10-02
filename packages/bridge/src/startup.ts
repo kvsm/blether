@@ -162,7 +162,7 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
       "Messages are end-to-end encrypted; the relay sees only who messaged whom, and when.",
   );
 
-  const found = { store, credentials, team, agent: agent.data };
+  const found = { store, credentials, team, agent: agent.data, log };
   try {
     return await open(found, false);
   } catch (error) {
@@ -192,11 +192,13 @@ async function open(
     credentials,
     team,
     agent,
+    log,
   }: {
     store: FileKeyStore;
     credentials: Credentials;
     team: TeamRecord;
     agent: string;
+    log: (line: string) => void;
   },
   takeover: boolean,
   server?: McpServer,
@@ -206,6 +208,7 @@ async function open(
     witness: new SeenLogs(store.home),
     readMessages: new ReadMessages(store.home, team.id, agent),
     takeover,
+    log,
   });
   // Another of the developer's devices may have added a device since.
   if (relay.identity && relay.identity.length > credentials.identity.length) {
