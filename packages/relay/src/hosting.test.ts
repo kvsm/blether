@@ -130,7 +130,9 @@ describe("hosting the relay", () => {
     });
   });
 
-  describe("upgrades", () => {
+  // Each test opens, copies and migrates real database files, which can take
+  // several seconds on a busy Windows CI runner.
+  describe("upgrades", { timeout: 20_000 }, () => {
     const path = () => join(dir, "relay.db");
 
     /** The current schema plus one migration, as the next relay release would have. */
