@@ -28,27 +28,25 @@ Every message is signed by the sending device and encrypted separately for each 
 
 ## Getting started
 
-You need Node 24 and pnpm (run `corepack enable` once to get the version this repo pins).
+You need Node 24.
 
-### 1. Build Blether
+### 1. Install Blether
 
 ```sh
-git clone https://github.com/kvsm/blether.git && cd blether
-pnpm install && pnpm build
-alias blether="node $PWD/packages/bridge/dist/cli-bin.js"
+npm install -g @kvsm/blether
 ```
 
-Every `blether` command below uses that alias; `blether help` lists them all.
+This installs the `blether` CLI (`blether help` lists its commands), the bridge (`blether-bridge`), and the Claude Code plugin. To upgrade, run the same command again, then `blether claude install` if you use Claude Code.
 
 ### 2. Run a relay
 
-To try Blether on one machine, start a local relay and leave it running:
+For a team on several machines, host a relay somewhere they can all reach, with TLS: see [Hosting a relay](#hosting-a-relay). To try Blether on one machine, run one locally with Docker and leave it running:
 
 ```sh
-node packages/relay/dist/bin.js        # ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
+docker run -d --name blether-relay -p 127.0.0.1:7357:7357 -v blether-relay:/data ghcr.io/kvsm/blether-relay
 ```
 
-For a team on several machines, host a relay somewhere they can all reach, with TLS: see [Hosting a relay](#hosting-a-relay).
+Or, from a clone of this repository: `pnpm install && pnpm build && node packages/relay/dist/bin.js`.
 
 ### 3. Create your identity
 
@@ -103,11 +101,10 @@ The Blether plugin adds the bridge, push delivery, and two skills:
 - **`/blether:setup`**: walks you through steps 3 to 5 for a project, and the extras below.
 
 ```sh
-claude plugin marketplace add /path/to/blether    # your clone, after pnpm build
-claude plugin install blether@blether
+blether claude install       # adds the plugin to Claude Code, from the installed package
 ```
 
-Claude Code asks for the path to your Blether clone when the plugin is enabled. Start a new session in the project, and the bridge acts as the agent its `.blether/session.json` names.
+Start a new session in the project, and the bridge acts as the agent its `.blether/session.json` names. The plugin also puts `blether` on Claude's Bash `PATH`, so Claude can run the CLI for you.
 
 #### Other agents
 
@@ -116,15 +113,12 @@ Add the bridge to the agent's MCP config:
 ```json
 {
   "mcpServers": {
-    "blether": {
-      "command": "node",
-      "args": ["/path/to/blether/packages/bridge/dist/bin.js"]
-    }
+    "blether": { "command": "blether-bridge" }
   }
 }
 ```
 
-The bridge looks for `.blether/session.json` in the directory the agent starts it in, or the nearest one above it inside the repository. For guidance on when and how to message teammates, give the agent [`plugin/skills/blether/SKILL.md`](plugin/skills/blether/SKILL.md): copy it into the agent's skills directory if it reads Agent Skills, or point to it from the project's `AGENTS.md`.
+The bridge looks for `.blether/session.json` in the directory the agent starts it in, or the nearest one above it inside the repository. For guidance on when and how to message teammates, give the agent the `blether` skill, at `$(npm root -g)/@kvsm/blether/plugin/skills/blether/SKILL.md` ([source](packages/blether/plugin/skills/blether/SKILL.md)): copy it into the agent's skills directory if it reads Agent Skills, or point to it from the project's `AGENTS.md`.
 
 If anything's wrong at start-up (no identity, an unknown team, a relay that can't be reached), the bridge still starts, offering a single `blether_status` tool that explains the problem, so the agent can tell you.
 
@@ -211,7 +205,7 @@ To keep a count always visible at the bottom of Claude Code, add Blether to your
 {
   "statusLine": {
     "type": "command",
-    "command": "node /path/to/blether/packages/bridge/dist/cli-bin.js status"
+    "command": "blether status"
   }
 }
 ```
@@ -261,18 +255,23 @@ Relay databases from development builds before schema 7 can't be upgraded: move 
 
 ## Development
 
-| Path                | What it is                                                                    |
-| ------------------- | ----------------------------------------------------------------------------- |
-| `packages/protocol` | Message, envelope, identity and team-log types shared by the bridge and relay |
-| `packages/bridge`   | The bridge (`blether-bridge`) and the `blether` CLI                           |
-| `packages/relay`    | The relay (`blether-relay`)                                                   |
-| `plugin`            | The Claude Code plugin: bridge, push delivery, and skills                     |
-| `e2e`               | End-to-end tests, driving real bridges, CLIs and relays                       |
-| `deploy`            | Docker Compose files and the relay image smoke test                           |
+| Path                | What it is                                                                                                           |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `packages/protocol` | Message, envelope, identity and team-log types shared by the bridge and relay                                        |
+| `packages/bridge`   | The bridge (`blether-bridge`) and the `blether` CLI                                                                  |
+| `packages/relay`    | The relay (`blether-relay`)                                                                                          |
+| `packages/blether`  | The `@kvsm/blether` npm package: the CLI and bridge bundled into the Claude Code plugin (`plugin/`), with its skills |
+| `e2e`               | End-to-end tests, driving real bridges, CLIs and relays                                                              |
+| `deploy`            | Docker Compose files and the relay image smoke test                                                                  |
 
 ```sh
 pnpm install
-pnpm build
+pnpm build        # compiles, then bundles the CLI and bridge into packages/blether/plugin/dist
 pnpm check        # lint, format check, typecheck, test
 pnpm test:watch
+pnpm --filter @kvsm/blether smoke   # checks the bundled CLI and bridge run on their own
 ```
+
+To use your working copy instead of the published package, run `npm install -g ./packages/blether` after `pnpm build`, then `blether claude install`.
+
+**Releasing:** bump the version in `packages/blether/package.json` and merge to `main`; the Publish workflow puts it on npm (it needs an `NPM_TOKEN` secret), and the Relay image workflow publishes the relay image.

@@ -1,0 +1,45 @@
+name: Publish
+
+# Publishes @kvsm/blether to npm when main has a version that isn't published
+# yet. Bump packages/blether/package.json's version to release.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Unpublished version?
+        id: version
+        run: |
+          version=$(node -p "require('./packages/blether/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "@kvsm/blether@$version" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "@kvsm/blether@$version is already published."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.version.outputs.publish == 'true'
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm --filter @kvsm/blether smoke
+
+      - name: Publish
+        if: steps.version.outputs.publish == 'true'
+        run: pnpm --filter @kvsm/blether publish --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

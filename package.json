@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && pnpm --filter @kvsm/blether bundle",
     "clean": "tsc -b --clean",
     "typecheck": "tsc -b && tsc -p tsconfig.test.json",
     "test": "vitest run",

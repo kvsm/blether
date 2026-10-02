@@ -4,3 +4,4 @@ coverage/
 *.tsbuildinfo
 .vscode/
 blether-relay.db*
+packages/blether/plugin/dist/

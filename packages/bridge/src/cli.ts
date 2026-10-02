@@ -53,6 +53,13 @@ import {
 } from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { writeSessionFile } from "./session-file.js";
+import {
+  PLUGIN_ID,
+  installClaudePlugin,
+  packageRoot,
+  runClaude,
+  type ClaudeRunner,
+} from "./claude-install.js";
 
 /**
  * The `blether` command. Everything that changes who a developer is, or who
@@ -84,6 +91,7 @@ Commands:
   agent list <team>                  Show the team's agents and who is online
   agent delete <team> <name>         Delete one of your agents (or any, as Team Admin)
   use <team> <agent> [--dir <path>]  Make sessions started in this project (or <path>) act as <agent>
+  claude install                     Install (or update) the Blether plugin in Claude Code
   escalations                        List messages your agents are holding for your decision
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
@@ -110,6 +118,10 @@ export interface CliContext {
   now?: () => Date;
   /** Where `blether use` writes by default. Defaults to the working directory. */
   cwd?: string;
+  /** Runs the `claude` CLI, for `blether claude install`. */
+  claude?: ClaudeRunner;
+  /** The installed package's root, for `blether claude install`. Found from this file by default. */
+  packageRoot?: string | undefined;
 }
 
 /** A failure to report to the user, with no stack trace. */
@@ -127,6 +139,8 @@ export async function runCli(
     io: context.io ?? { out: console.log, err: console.error },
     ...(context.now ? { now: context.now } : {}),
     ...(context.cwd ? { cwd: context.cwd } : {}),
+    ...(context.claude ? { claude: context.claude } : {}),
+    ...("packageRoot" in context ? { packageRoot: context.packageRoot } : {}),
   };
   try {
     return await dispatch(argv, ctx);
@@ -208,6 +222,13 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
     }
     case "use":
       return use(rest, ctx);
+    case "claude": {
+      const [sub] = rest;
+      if (sub === "install") return claudeInstall(ctx);
+      throw new CliError(
+        `Unknown claude command: ${sub ?? "(none)"}\n\n${USAGE}`,
+      );
+    }
     case "invite":
       return invite(rest, ctx);
     case "revoke-invite":
@@ -911,6 +932,32 @@ async function agentDelete(args: string[], ctx: CliContext): Promise<number> {
   });
   ctx.io.out(
     `Deleted agent ${name} from ${record.name}. Unread messages to it are lost, and their senders will be told. The name can be used again.`,
+  );
+  return 0;
+}
+
+async function claudeInstall(ctx: CliContext): Promise<number> {
+  const root = "packageRoot" in ctx ? ctx.packageRoot : packageRoot();
+  if (!root) {
+    throw new CliError(
+      "This blether isn't from the @kvsm/blether package, which carries the plugin. Install it with `npm install -g @kvsm/blether`, or from a clone run `pnpm build` and then `node packages/blether/plugin/dist/cli.js claude install`.",
+    );
+  }
+  try {
+    await installClaudePlugin(root, ctx.claude ?? runClaude, ctx.io.out);
+  } catch (error) {
+    const missing = (error as { code?: unknown }).code === "ENOENT";
+    throw new CliError(
+      missing
+        ? "Couldn't run `claude`. Install Claude Code, or check it's on your PATH."
+        : (error as Error).message,
+    );
+  }
+  ctx.io.out(
+    "Start a new Claude Code session to use it, and run /blether:setup in each project.",
+  );
+  ctx.io.out(
+    `For push delivery, start sessions with: claude --dangerously-load-development-channels plugin:${PLUGIN_ID}`,
   );
   return 0;
 }
