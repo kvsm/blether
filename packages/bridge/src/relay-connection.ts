@@ -35,6 +35,8 @@ import {
 
 /** How long a verified team log is used before it's fetched again. */
 const TEAM_CACHE_MS = 30_000;
+/** Longest a mailbox read waits for the relay to finish sending the backlog. */
+const CAUGHT_UP_TIMEOUT_MS = 5_000;
 
 /** The relay refused something, or its answer didn't verify. */
 export class RelayError extends Error {
@@ -183,6 +185,9 @@ export class RelayConnection {
   private closedBecause: string | undefined;
   /** Deliveries are decrypted and verified one at a time, in order. */
   private inbox: Promise<void> = Promise.resolve();
+  /** Resolves when the relay says it has sent the backlog (immediately for a CLI session). */
+  private caughtUp: Promise<void> = Promise.resolve();
+  private markCaughtUp: () => void = () => {};
   /** The team log as last verified, refreshed when it's missing something or stale. */
   private teamCache: { team: VerifiedTeam; at: number } | undefined;
   private readonly sends = new Map<string, Pending<SendReceipt>>();
@@ -268,6 +273,13 @@ export class RelayConnection {
     const welcomed = new Promise<Welcome>((resolve, reject) => {
       connection.welcome = { resolve, reject };
     });
+    if (scope) {
+      connection.caughtUp = new Promise((resolve) => {
+        connection.markCaughtUp = resolve;
+        // Don't hold mailbox reads for ever if the relay never says so.
+        setTimeout(resolve, CAUGHT_UP_TIMEOUT_MS).unref();
+      });
+    }
     // Avoid unhandled rejections if the socket fails before we await these.
     challenged.catch(() => {});
     welcomed.catch(() => {});
@@ -477,9 +489,14 @@ export class RelayConnection {
     return (await this.findAgent(name))?.agent.owner;
   }
 
-  /** Resolves once every delivery received so far has been decrypted and verified. */
-  settled(): Promise<void> {
-    return this.inbox;
+  /**
+   * Resolves once the relay has sent everything that was waiting when the
+   * session connected, and every delivery received so far has been
+   * decrypted and verified.
+   */
+  async settled(): Promise<void> {
+    await this.caughtUp;
+    await this.inbox;
   }
 
   /** Starts a team whose log is `log`, returning it as the relay stored it. */
@@ -794,6 +811,9 @@ export class RelayConnection {
         this.inbox = this.inbox.then(() => this.acceptLost(messages));
         return;
       }
+      case "caught-up":
+        this.markCaughtUp();
+        return;
       case "deliver": {
         const { message } = frame;
         if (this.seen.has(message.id)) return;

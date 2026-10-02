@@ -342,6 +342,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             deliver(socket, message);
           }
           sendLost(socket, scope.team, scope.agent);
+          send({ type: "caught-up" });
         }
         return;
       }

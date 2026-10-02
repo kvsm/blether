@@ -33,6 +33,8 @@ async function fakeRelay(answers: {
   welcomeIdentity?: IdentityLog;
   teamLog?: TeamLog;
   identities?: IdentityLog[];
+  /** After the welcome, wait this long before saying the backlog has been sent. */
+  caughtUpAfterMs?: number;
 }) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
   await new Promise((resolve) => wss.once("listening", resolve));
@@ -47,6 +49,12 @@ async function fakeRelay(answers: {
           developer: me.id,
           identity: answers.welcomeIdentity ?? frame.identity,
         });
+        if (answers.caughtUpAfterMs !== undefined) {
+          setTimeout(
+            () => send({ type: "caught-up" }),
+            answers.caughtUpAfterMs,
+          );
+        }
       }
       if (frame?.type === "get-team" && answers.teamLog) {
         send({
@@ -68,6 +76,45 @@ async function fakeRelay(answers: {
       }),
   };
 }
+
+describe("RelayConnection catching up", () => {
+  let closeRelay: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    await closeRelay?.();
+    closeRelay = undefined;
+  });
+
+  const connectAsAgent = async (caughtUpAfterMs: number) => {
+    const relay = await fakeRelay({ caughtUpAfterMs });
+    closeRelay = relay.close;
+    return RelayConnection.connect(relay.url, credentials, {
+      scope: { team: "team", agent: "web" },
+    });
+  };
+
+  // The relay sends what was waiting after the welcome, in later frames, so
+  // a mailbox read straight after connecting must wait for them.
+  it("waits for the relay to finish sending the backlog", async () => {
+    const connection = await connectAsAgent(300);
+    const started = Date.now();
+
+    await connection.settled();
+
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+    await connection.close();
+  });
+
+  it("doesn't wait once the relay has caught up", async () => {
+    const connection = await connectAsAgent(0);
+    await connection.settled();
+    const started = Date.now();
+
+    await connection.settled();
+
+    expect(Date.now() - started).toBeLessThan(100);
+    await connection.close();
+  });
+});
 
 describe("RelayConnection against a dishonest relay", () => {
   let home: string;

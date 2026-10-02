@@ -99,6 +99,7 @@ async function fakeRelay(messages: Message[], lost: SentMessage[] = []) {
         });
         for (const message of messages) send({ type: "deliver", message });
         if (lost.length > 0) send({ type: "lost", messages: lost });
+        send({ type: "caught-up" });
       }
       if (frame?.type === "get-team") {
         send({
