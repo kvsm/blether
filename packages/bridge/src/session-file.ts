@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { AgentName } from "@blether/protocol";
 import { z } from "zod";
@@ -23,11 +24,34 @@ const GITIGNORE =
 
 export class SessionFileError extends Error {}
 
-/** Writes `<projectDir>/.blether/session.json`, returning its path. */
+/**
+ * Whether `<dir>/.blether` is a Blether home, where identities and keys live,
+ * rather than a project's: the one in use, or the default `~/.blether`.
+ */
+function isBletherHome(dir: string, bletherHome: string): boolean {
+  const same = (a: string, b: string) =>
+    process.platform === "win32"
+      ? resolve(a).toLowerCase() === resolve(b).toLowerCase()
+      : resolve(a) === resolve(b);
+  const candidate = join(dir, DIR);
+  return same(candidate, bletherHome) || same(candidate, join(homedir(), DIR));
+}
+
+/**
+ * Writes `<projectDir>/.blether/session.json`, returning its path. Refuses a
+ * directory whose `.blether` is a Blether home (running `blether use` from
+ * the home directory, say).
+ */
 export function writeSessionFile(
   projectDir: string,
   contents: SessionFileContents,
+  bletherHome: string,
 ): string {
+  if (isBletherHome(projectDir, bletherHome)) {
+    throw new SessionFileError(
+      `${resolve(projectDir)} is your home directory, where Blether keeps your identity, not a project. Run "blether use" from the project's root, or give it --dir <project>.`,
+    );
+  }
   const dir = join(projectDir, DIR);
   mkdirSync(dir, { recursive: true });
   const ignore = join(dir, ".gitignore");
@@ -40,8 +64,8 @@ export function writeSessionFile(
 /**
  * Finds the session file for a session started in `start`: in `start` or the
  * nearest directory above it that has one, stopping at the repository root
- * (the first directory with `.git`). The Blether home, `~/.blether`, is never
- * taken for a project's.
+ * (the first directory with `.git`). A Blether home (the one in use, or the
+ * default `~/.blether`) is never taken for a project's.
  */
 export function findSessionFile(
   start: string,
@@ -51,7 +75,7 @@ export function findSessionFile(
   for (;;) {
     const candidate = join(dir, DIR);
     const path = join(candidate, FILE);
-    if (resolve(candidate) !== resolve(bletherHome) && existsSync(path)) {
+    if (!isBletherHome(dir, bletherHome) && existsSync(path)) {
       return { path, contents: readSessionFile(path) };
     }
     const parent = dirname(dir);
