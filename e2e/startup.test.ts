@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -152,6 +153,28 @@ describe("bridge start-up", () => {
 
       expect(bridge.problem).toContain("isn't valid JSON");
       expect(bridge.problem).toContain("blether use <team> <agent>");
+    });
+
+    it("won't write into the Blether home, as from the home directory", async () => {
+      // A device whose Blether home is <dir>/.blether, as ~/.blether is.
+      const me = device(join(root, "me"), ".blether");
+      await me.run("init", "--name", "Me");
+      await me.run("team", "create", "solo", "--relay", relay.url);
+      await me.run("agent", "create", "solo", "web");
+
+      const used = await me.run(
+        "use",
+        "solo",
+        "web",
+        "--dir",
+        join(root, "me"),
+      );
+
+      expect(used).toMatchObject({ code: 1 });
+      expect(used.err).toContain("is your home directory");
+      expect(existsSync(join(root, "me", ".blether", "session.json"))).toBe(
+        false,
+      );
     });
 
     it("only lets you use your own, existing agents", async () => {

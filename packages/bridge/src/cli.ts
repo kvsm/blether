@@ -52,7 +52,7 @@ import {
   PolicyStore,
 } from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
-import { writeSessionFile } from "./session-file.js";
+import { SessionFileError, writeSessionFile } from "./session-file.js";
 import {
   PLUGIN_ID,
   installClaudePlugin,
@@ -989,10 +989,17 @@ async function use(args: string[], ctx: CliContext): Promise<number> {
       `${name} belongs to another developer. Use one of yours (blether agent list ${record.name}), or create one.`,
     );
   }
-  const path = writeSessionFile(values.dir ?? ctx.cwd ?? process.cwd(), {
-    team: record.name,
-    agent: name,
-  });
+  let path;
+  try {
+    path = writeSessionFile(
+      values.dir ?? ctx.cwd ?? process.cwd(),
+      { team: record.name, agent: name },
+      ctx.store.home,
+    );
+  } catch (error) {
+    if (error instanceof SessionFileError) throw new CliError(error.message);
+    throw error;
+  }
   ctx.io.out(
     `Sessions started in this project will act as ${name} in ${record.name}.`,
   );
