@@ -1,0 +1,5 @@
+{$BLETHER_DOMAIN} {
+	# Caddy proxies WebSocket upgrades as they are; the relay's heartbeat
+	# keeps idle connections alive.
+	reverse_proxy relay:7357
+}

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type {
   AgentName,
@@ -9,16 +10,139 @@ import type {
   TeamLog,
 } from "@blether/protocol";
 
-/** Bumped whenever the schema changes incompatibly. */
-const SCHEMA_VERSION = 7;
+/**
+ * How to create the database at its current version, and how to bring an
+ * older one up to it. To change the schema: update `create`, append a
+ * migration from the previous version, and bump `version`.
+ */
+export interface StoreSchema {
+  version: number;
+  /** Creates every table at `version`, in an empty database. */
+  create: string;
+  /** The oldest version `migrations` can start from. */
+  oldest: number;
+  /** `migrations[i]` takes a database from version `oldest + i` to the next. */
+  migrations: string[];
+}
 
-export class IncompatibleDatabaseError extends Error {
-  constructor(path: string, version: number) {
-    super(
-      `${path} was created by an older relay (schema ${version}, need ${SCHEMA_VERSION}). ` +
-        "Dev-mode databases can't be migrated; move it aside and restart the relay.",
+export const CURRENT_SCHEMA: StoreSchema = {
+  version: 7,
+  create: `
+    CREATE TABLE developers (
+      id   TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      log  TEXT NOT NULL
     );
+    CREATE TABLE teams (
+      id      TEXT PRIMARY KEY,
+      log     TEXT NOT NULL,
+      entries INTEGER NOT NULL
+    );
+    CREATE TABLE messages (
+      seq       INTEGER PRIMARY KEY AUTOINCREMENT,
+      id        TEXT NOT NULL UNIQUE,
+      team      TEXT NOT NULL REFERENCES teams (id),
+      sender    TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      envelope    TEXT,
+      received_at TEXT NOT NULL,
+      status    TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'read', 'lost')),
+      -- 1 while the sender hasn't yet been told the message was lost.
+      lost_unacked INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX messages_unread
+      ON messages (team, recipient, seq) WHERE status <> 'read';
+    CREATE INDEX messages_sent ON messages (team, sender, seq);
+  `,
+  // Version 7 is the first relay release databases are kept from.
+  oldest: 7,
+  migrations: [],
+};
+
+/** A database this relay can't open: from a development build, or a newer relay. */
+export class IncompatibleDatabaseError extends Error {
+  constructor(message: string) {
+    super(message);
     this.name = "IncompatibleDatabaseError";
+  }
+}
+
+/**
+ * Writes a consistent copy of the relay database at `path` to `target`,
+ * which must not exist yet. Safe while the relay is running.
+ */
+export function backUpDatabase(path: string, target: string): void {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    db.prepare("VACUUM INTO ?").run(target);
+  } finally {
+    db.close();
+  }
+}
+
+export interface StoreOptions {
+  /** Where to report migrations. */
+  log?: (line: string) => void;
+  /** Only for tests: a schema other than the current one. */
+  schema?: StoreSchema;
+}
+
+/** Creates the schema in a new database, or migrates an older one to it. */
+function openSchema(
+  db: DatabaseSync,
+  path: string,
+  schema: StoreSchema,
+  log: (line: string) => void,
+) {
+  const { user_version: found } = db.prepare("PRAGMA user_version").get() as {
+    user_version: number;
+  };
+  const isEmpty =
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table'").get() ===
+    undefined;
+  if (isEmpty) {
+    db.exec(
+      `BEGIN; ${schema.create}; PRAGMA user_version = ${schema.version}; COMMIT;`,
+    );
+    return;
+  }
+  if (found === schema.version) return;
+  if (found > schema.version) {
+    throw new IncompatibleDatabaseError(
+      `${path} was written by a newer relay (schema ${found}; this relay knows up to ${schema.version}). ` +
+        "Run the newer relay, or restore a backup taken before it was upgraded.",
+    );
+  }
+  if (found < schema.oldest) {
+    throw new IncompatibleDatabaseError(
+      `${path} was created by an earlier development build of the relay (schema ${found}) and can't be migrated. ` +
+        "Move it aside and restart the relay; teams will need setting up again.",
+    );
+  }
+  if (path !== ":memory:") {
+    const backup = `${path}.before-schema-${schema.version}`;
+    if (existsSync(backup)) {
+      log(`Keeping the copy already saved as ${backup}.`);
+    } else {
+      db.prepare("VACUUM INTO ?").run(backup);
+      log(`Saved a copy of ${path} as ${backup} before migrating it.`);
+    }
+  }
+  for (let version = found; version < schema.version; version++) {
+    const migration = schema.migrations[version - schema.oldest];
+    if (migration === undefined) {
+      throw new Error(`No migration from schema ${version}.`);
+    }
+    db.exec("BEGIN");
+    try {
+      db.exec(migration);
+      db.exec(`PRAGMA user_version = ${version + 1}`);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+    log(`Migrated ${path} from schema ${version} to ${version + 1}.`);
   }
 }
 
@@ -33,49 +157,23 @@ export class IncompatibleDatabaseError extends Error {
 export class MailboxStore {
   private readonly db: DatabaseSync;
 
-  /** Opens (creating if needed) a store at `path`, or in memory for ":memory:". */
-  constructor(path: string) {
+  /**
+   * Opens (creating if needed) a store at `path`, or in memory for
+   * ":memory:". An older database is migrated to the current schema, after
+   * a copy is saved beside it as `<path>.before-schema-<n>`.
+   */
+  constructor(
+    path: string,
+    { log = () => {}, schema = CURRENT_SCHEMA }: StoreOptions = {},
+  ) {
     this.db = new DatabaseSync(path);
-    const { user_version: version } = this.db
-      .prepare("PRAGMA user_version")
-      .get() as { user_version: number };
-    const hasTables =
-      this.db
-        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table'")
-        .get() !== undefined;
-    if (hasTables && version !== SCHEMA_VERSION) {
+    try {
+      this.db.exec("PRAGMA journal_mode = WAL");
+      openSchema(this.db, path, schema, log);
+    } catch (error) {
       this.db.close();
-      throw new IncompatibleDatabaseError(path, version);
+      throw error;
     }
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA user_version = ${SCHEMA_VERSION};
-      CREATE TABLE IF NOT EXISTS developers (
-        id   TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        log  TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS teams (
-        id      TEXT PRIMARY KEY,
-        log     TEXT NOT NULL,
-        entries INTEGER NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS messages (
-        seq       INTEGER PRIMARY KEY AUTOINCREMENT,
-        id        TEXT NOT NULL UNIQUE,
-        team      TEXT NOT NULL REFERENCES teams (id),
-        sender    TEXT NOT NULL,
-        recipient TEXT NOT NULL,
-        envelope    TEXT,
-        received_at TEXT NOT NULL,
-        status    TEXT NOT NULL CHECK (status IN ('queued', 'delivered', 'read', 'lost')),
-        -- 1 while the sender hasn't yet been told the message was lost.
-        lost_unacked INTEGER NOT NULL DEFAULT 0
-      );
-      CREATE INDEX IF NOT EXISTS messages_unread
-        ON messages (team, recipient, seq) WHERE status <> 'read';
-      CREATE INDEX IF NOT EXISTS messages_sent ON messages (team, sender, seq);
-    `);
   }
 
   // Developers
