@@ -71,6 +71,8 @@ jobs:
           # Only for the first publish, before the trusted publisher exists.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # npm refuses even a dry run of a version that's already published, so
+      # this runs only for a new version (one waiting to be released).
       - name: What would be published
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.version.outputs.publish == 'true'
         run: npm publish "$TARBALL" --access public --dry-run
