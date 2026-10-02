@@ -172,6 +172,11 @@ export const RelayFrame = z.discriminatedUnion("type", [
     status: DeliveryStatus.exclude(["read"]),
   }),
   z.object({ type: z.literal("deliver"), message: Message }),
+  /**
+   * Sent once after an agent session's welcome, when everything that was
+   * waiting for it (messages and lost notices) has been sent.
+   */
+  z.object({ type: z.literal("caught-up") }),
   /** Reply to `list-sent`, newest first. */
   z.object({
     type: z.literal("sent-list"),
