@@ -1,0 +1,24 @@
+{
+  "name": "@blether/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "Message and envelope types shared by the Blether bridge and relay.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "libsodium-wrappers": "^0.8.4",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/libsodium-wrappers": "^0.8.2"
+  }
+}

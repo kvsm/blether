@@ -1,0 +1,33 @@
+# A Blether relay behind Caddy, which gets and renews its TLS certificate.
+# Set BLETHER_DOMAIN in .env beside this file. See docs/self-hosting.md.
+
+services:
+  relay:
+    image: ghcr.io/kvsm/blether-relay:${BLETHER_RELAY_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - relay-data:/data
+    # Reached only through Caddy, never directly.
+    expose:
+      - "7357"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BLETHER_DOMAIN: ${BLETHER_DOMAIN:?Set BLETHER_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      relay:
+        condition: service_healthy
+
+volumes:
+  relay-data:
+  caddy-data:
+  caddy-config:

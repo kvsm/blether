@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vscode/
+blether-relay.db*
+packages/blether/plugin/dist/
+packages/blether/LICENSE

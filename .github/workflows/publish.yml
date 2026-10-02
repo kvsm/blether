@@ -1,0 +1,76 @@
+name: Publish
+
+# Publishes @kvsm/blether to npm when main has a version that isn't published
+# yet: bump packages/blether/package.json's version to release. On pull
+# requests that touch the package, it does everything but publish.
+#
+# Publishing uses npm trusted publishing: npm trusts this workflow file in
+# kvsm/blether, so no token is needed. npm only allows that for a package
+# that already exists, so the very first publish falls back to the NPM_TOKEN
+# secret; once the trusted publisher is set up on npmjs.com, delete the
+# secret. See "Releasing" in the README.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - .github/workflows/publish.yml
+      - packages/blether/**
+
+jobs:
+  npm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Lets npm verify this workflow's identity (OIDC) for trusted publishing.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later.
+      - name: npm with trusted publishing
+        run: |
+          if ! npx -y semver -r ">=11.5.1" "$(npm --version)" >/dev/null; then
+            npm install -g npm@^11.5.1
+          fi
+          npm --version
+
+      - name: Unpublished version?
+        id: version
+        run: |
+          version=$(node -p "require('./packages/blether/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if npm view "@kvsm/blether@$version" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "@kvsm/blether@$version is already published."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "@kvsm/blether@$version isn't published yet."
+          fi
+
+      - name: Build, smoke-test and pack
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm --filter @kvsm/blether smoke
+          # pnpm writes the tarball: it replaces workspace: versions, and runs
+          # the bundle step. npm publishes it, with trusted publishing.
+          pnpm --filter @kvsm/blether pack --pack-destination "$RUNNER_TEMP"
+          echo "TARBALL=$(ls "$RUNNER_TEMP"/kvsm-blether-*.tgz)" >> "$GITHUB_ENV"
+
+      - name: Publish
+        if: github.event_name == 'push' && steps.version.outputs.publish == 'true'
+        run: npm publish "$TARBALL" --access public
+        env:
+          # Only for the first publish, before the trusted publisher exists.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: What would be published
+        if: github.event_name == 'pull_request'
+        run: npm publish "$TARBALL" --access public --dry-run
