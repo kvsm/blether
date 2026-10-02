@@ -1,0 +1,25 @@
+# A Blether relay on a machine with no open ports, reachable through a
+# Cloudflare Tunnel, which also provides TLS. Set TUNNEL_TOKEN in .env beside
+# this file. See "Run it at home" in docs/self-hosting.md.
+
+services:
+  relay:
+    image: ghcr.io/kvsm/blether-relay:${BLETHER_RELAY_VERSION:-latest}
+    restart: unless-stopped
+    volumes:
+      - relay-data:/data
+    expose:
+      - "7357"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Set TUNNEL_TOKEN in .env}
+    depends_on:
+      relay:
+        condition: service_healthy
+
+volumes:
+  relay-data:

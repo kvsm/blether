@@ -1,3 +1,5 @@
+import { createServer as createHttpServer, type Server } from "node:http";
+import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import {
   ClientFrame,
@@ -34,6 +36,14 @@ export interface RelayOptions {
    * session. Defaults to 15 seconds.
    */
   heartbeatMs?: number;
+  /**
+   * A certificate and private key (PEM) to serve wss:// directly. Without
+   * them the relay serves plain ws://, for a reverse proxy that terminates
+   * TLS in front of it, or for local development.
+   */
+  tls?: { cert: string; key: string };
+  /** Where to report things the operator should know, such as database migrations. */
+  log?: (line: string) => void;
 }
 
 export interface Relay {
@@ -63,18 +73,36 @@ const sessionKey = ({ team, agent }: AgentScope) => `${team}\n${agent}`;
  * envelopes it can't read.
  */
 export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
-  const store = new MailboxStore(options.databasePath ?? ":memory:");
+  const store = new MailboxStore(
+    options.databasePath ?? ":memory:",
+    options.log ? { log: options.log } : {},
+  );
   const now = options.now ?? (() => new Date());
+  const http: Server = options.tls
+    ? createHttpsServer({ cert: options.tls.cert, key: options.tls.key })
+    : createHttpServer();
+  // Plain HTTP is only for health checks; everything else is WebSocket.
+  http.on("request", (req, res) => {
+    if (req.method === "GET" && req.url === "/healthz") {
+      res.writeHead(200, { "content-type": "text/plain" }).end("ok\n");
+    } else {
+      res
+        .writeHead(426, { "content-type": "text/plain", upgrade: "websocket" })
+        .end("This is a Blether relay: connect with a Blether bridge.\n");
+    }
+  });
   const wss = new WebSocketServer({
-    port: options.port ?? 0,
-    host: options.host ?? "127.0.0.1",
+    server: http,
     // Generous for a 32,000-character message sealed for many devices,
     // and a bound on what any one frame can make the relay hold.
     maxPayload: 8 * 1024 * 1024,
   });
   await new Promise<void>((resolve, reject) => {
-    wss.once("listening", resolve);
-    wss.once("error", reject);
+    http.once("error", reject);
+    http.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => {
+      http.off("error", reject);
+      resolve();
+    });
   });
 
   const sessions = new Map<string, WebSocket>();
@@ -523,16 +551,17 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     }
   }, options.heartbeatMs ?? 15_000);
 
-  const { address, port } = wss.address() as AddressInfo;
+  const { address, port } = http.address() as AddressInfo;
   const host = address.includes(":") ? `[${address}]` : address;
 
   return {
-    url: `ws://${host}:${port}`,
+    url: `${options.tls ? "wss" : "ws"}://${host}:${port}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
         clearInterval(heartbeat);
         for (const client of wss.clients) client.terminate();
-        wss.close((err) => {
+        wss.close();
+        http.close((err) => {
           store.close();
           if (err) reject(err);
           else resolve();
