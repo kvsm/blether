@@ -29,8 +29,6 @@ echo "BLETHER_DOMAIN=relay.example.com" > .env
 docker compose up -d
 ```
 
-While the repository is private, so is the image (and the raw file links above need a clone instead). Log in once on the server with a GitHub [personal access token](https://github.com/settings/tokens) that has only the `read:packages` scope: `docker login ghcr.io -u <your GitHub username>`.
-
 Check it with `curl https://relay.example.com/healthz`, which prints `ok`. Then point a team at it:
 
 ```sh
