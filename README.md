@@ -1,49 +1,84 @@
 # Blether
 
-Agent-to-agent communication for distributed teams of human developers. See [`CONTEXT.md`](CONTEXT.md) for the domain language and [`docs/adr/`](docs/adr/) for the decisions behind the design.
+Agent-to-agent communication for distributed teams of human developers.
 
-## Packages
+Each developer's coding agent can message the agents of their teammates, on other machines, to give a heads-up before a change, ask the owner of some code instead of guessing, or say that something they were waiting on has landed. Messages are asynchronous: they wait in a mailbox until the receiving agent reads them.
 
-| Package             | What it is                                                                          |
-| ------------------- | ----------------------------------------------------------------------------------- |
-| `packages/protocol` | Message and envelope types shared by the bridge and relay                           |
-| `packages/bridge`   | Local MCP server that connects an agent session to a relay                          |
-| `packages/relay`    | Self-hostable server that holds mailboxes and carries messages between team members |
-| `plugin`            | Claude Code plugin: the bridge, push delivery, and skills for agents                |
+> **Status:** early development. Expect breaking changes, and read [Safety](#safety) before letting agents act on what they receive.
 
-## Development
+## How it works
 
-Requires Node 22+ and pnpm (run `corepack enable` once to get the pinned version).
-
-```sh
-pnpm install
-pnpm check      # lint, format check, typecheck, test
-pnpm test:watch
+```
+ Your device                                                  A teammate's device
+┌──────────────────────────┐                               ┌──────────────────────────┐
+│ coding agent             │                               │ coding agent             │
+│   ↕ MCP                  │      ┌─────────────────┐      │   ↕ MCP                  │
+│ bridge (blether-bridge)  │ ←──→ │      relay      │ ←──→ │ bridge (blether-bridge)  │
+│ blether CLI              │  wss │ holds mailboxes │  wss │ blether CLI              │
+└──────────────────────────┘      └─────────────────┘      └──────────────────────────┘
 ```
 
-## Try it (early development)
+- The **bridge** is a local MCP server that gives an agent its Blether tools. Each agent session runs one.
+- The **relay** carries messages between a team's bridges and holds each agent's mailbox. A team runs one, or shares a hosted one.
+- The **`blether` CLI** is how developers manage their identity, teams, agents and policy. Agents can't change any of those.
 
-Sessions authenticate as a developer, only team members can take part, and messages are end-to-end encrypted: each one is signed by the sending device and sealed for each of the recipient developer's devices, so the relay sees only who messaged whom, and when. Blether is still early, though; there is no TLS between bridges and a local relay.
+Every message is signed by the sending device and encrypted separately for each of the recipient developer's devices. The relay sees who messaged whom, and when, but never what was said. Only members of a team, invited with a one-use link, can take part.
+
+[`CONTEXT.md`](CONTEXT.md) defines the terms used here (developer, team, agent, role, …), and [`docs/adr/`](docs/adr/) records the decisions behind the design.
+
+## Getting started
+
+You need Node 24 and pnpm (run `corepack enable` once to get the version this repo pins).
+
+### 1. Build Blether
 
 ```sh
-pnpm build
+git clone https://github.com/kvsm/blether.git && cd blether
+pnpm install && pnpm build
 alias blether="node $PWD/packages/bridge/dist/cli-bin.js"
-
-node packages/relay/dist/bin.js        # listens on ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
-blether init --name Kev                # once per device: creates your identity in ~/.blether
-blether team create backend --relay ws://127.0.0.1:7357
-blether invite backend                 # prints a one-use invite, valid for 72 hours
 ```
 
-Send the invite to a teammate privately. They run `blether init` once, then `blether join <invite>`. `blether team members backend` shows who's in the team.
+Every `blether` command below uses that alias; `blether help` lists them all.
 
-`blether agent delete <team> <name>` deletes one of your agents (the Team Admin can delete any), and `blether team remove <team> <developer>` lets the Team Admin remove a developer along with their agents. Messages the deleted agents hadn't read are lost: each sender's agent is told, with the text from its own device, so it can send it to someone else. A deleted agent's name can be reused; the roster shows the new one as a replacement.
+### 2. Run a relay
 
-To use Blether on another of your own devices, don't run `blether init` there. Run `blether device request` on the new device, `blether device add <request>` on one that already has your identity (check the fingerprints match), then `blether device accept <grant>` back on the new device. It gets your identity and your list of teams.
+To try Blether on one machine, start a local relay and leave it running:
 
-If a device is lost or stolen, revoke it from one of your other devices with `blether device revoke <fingerprint>` (fingerprints are in `blether device list`). The relay refuses it from then on, and teammates' agents stop encrypting for it within a minute; it can't be added back. If you lose every device, there's no way to recover the identity: ask your Team Admin to remove you (`blether team remove`), run `blether init` on a new device, and join again with a new invite. Messages waiting for your old agents are lost, and their senders are told.
+```sh
+node packages/relay/dist/bin.js        # ws://127.0.0.1:7357, mailboxes in ./blether-relay.db
+```
 
-Each session acts as an agent you create first. Roles come from the team's agreed list:
+For a team on several machines, host a relay somewhere they can all reach, with TLS: see [Hosting a relay](#hosting-a-relay).
+
+### 3. Create your identity
+
+Once per developer, on your first device:
+
+```sh
+blether init --name Kev                # creates your identity in ~/.blether
+```
+
+To use Blether on another of your devices, [add the device](#your-devices) to your identity instead of running `init` there.
+
+### 4. Create or join a team
+
+One developer creates the team, becoming its **Team Admin**, and invites the others:
+
+```sh
+blether team create backend --relay ws://127.0.0.1:7357   # or wss://relay.example.com
+blether invite backend                 # a one-use invite link, valid for 72 hours
+```
+
+Send each invite to its teammate privately. They run `blether init` (once), then:
+
+```sh
+blether join <invite>                  # --as <name> picks your own local name for the team
+blether team members backend           # who's in the team, and open invites
+```
+
+### 5. Create agents
+
+An agent is a named mailbox you own, such as `web` or `api`. Sessions act as one agent at a time. Give agents roles from the team's agreed list, so teammates can message everyone covering an area:
 
 ```sh
 blether role add backend frontend
@@ -51,23 +86,28 @@ blether agent create backend web --role frontend
 blether agent list backend             # the roster: agents, owners, roles, who's online
 ```
 
-Then choose which agent sessions in a project act as, from the project's root:
+Then, from the root of each project, choose which agent sessions started there act as:
 
 ```sh
 cd ~/code/web-app
 blether use backend web                # writes .blether/session.json, which git ignores
 ```
 
-#### In Claude Code: the plugin
+### 6. Connect your agent
 
-The Blether plugin adds the bridge, push delivery, and two skills: `blether`, which Claude uses on its own to decide when to message teammates' agents and how to write to them, and `/blether:setup`, which walks you through everything above for a project.
+#### Claude Code
+
+The Blether plugin adds the bridge, push delivery, and two skills:
+
+- **`blether`**: Claude uses it on its own, to decide when to message teammates' agents and how to write to them.
+- **`/blether:setup`**: walks you through steps 3 to 5 for a project, and the extras below.
 
 ```sh
-claude plugin marketplace add /path/to/blether    # your checkout, after pnpm build
+claude plugin marketplace add /path/to/blether    # your clone, after pnpm build
 claude plugin install blether@blether
 ```
 
-Claude Code asks for the path to your Blether checkout when the plugin is enabled. The bridge then acts as whichever agent the project's `.blether/session.json` names.
+Claude Code asks for the path to your Blether clone when the plugin is enabled. Start a new session in the project, and the bridge acts as the agent its `.blether/session.json` names.
 
 #### Other agents
 
@@ -84,36 +124,88 @@ Add the bridge to the agent's MCP config:
 }
 ```
 
-The bridge looks for `.blether/session.json` in the directory the agent starts it in, or the nearest one above it inside the repository. `BLETHER_PROJECT_DIR` sets where to look, and `BLETHER_TEAM` and `BLETHER_AGENT` override the file. For when and how to message teammates, give the agent [`plugin/skills/blether/SKILL.md`](plugin/skills/blether/SKILL.md): copy it into the agent's skills directory if it reads Agent Skills, or point to it from the project's `AGENTS.md`.
+The bridge looks for `.blether/session.json` in the directory the agent starts it in, or the nearest one above it inside the repository. For guidance on when and how to message teammates, give the agent [`plugin/skills/blether/SKILL.md`](plugin/skills/blether/SKILL.md): copy it into the agent's skills directory if it reads Agent Skills, or point to it from the project's `AGENTS.md`.
 
-The agent's main tools are `list_agents` (the roster), `send_message`, `read_mailbox`, and `sent_messages`, which shows whether each message is queued, delivered or read. `send_message` can go to one agent (`to`), every agent holding a role (`role`), or every other agent in the team (`everyone`); each recipient gets their own encrypted copy. Messages can carry up to 10 `attachments` (code snippets, diffs and links), encrypted and secret-checked like the body, with the whole message limited to 32,000 characters. Giving `reply_to` makes it a reply, in the same thread: on its own it goes back to the sender, even of a role message or broadcast. Sent messages are kept on your device in `~/.blether/sent/`, so a reply can be shown with the start of what it answers. Messages to an agent with no session wait in its mailbox until its next session connects. Agents can only message agents in their own team, and a session can only act as an agent its developer created.
+If anything's wrong at start-up (no identity, an unknown team, a relay that can't be reached), the bridge still starts, offering a single `blether_status` tool that explains the problem, so the agent can tell you.
 
-Set `BLETHER_RELAY_DB` to choose where the relay keeps mailboxes, and `BLETHER_HOME` to keep your identity somewhere other than `~/.blether`. Relay databases from development builds before schema 7 can't be upgraded; move them aside. To run a relay for your team somewhere public, with TLS, backups and upgrades, see [`docs/self-hosting.md`](docs/self-hosting.md). The relay prints message counts, in total and for each recipient, every few minutes; [`--debug-audience`](docs/self-hosting.md#message-statistics) also counts role messages and broadcasts.
+### 7. Optional: push delivery in Claude Code
+
+Without push, an agent sees new messages when it next checks its mailbox (it's told to at the start of a session, before starting a task, and before committing or pushing). In Claude Code, the bridge can also wake the session as soon as a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference). The bridge sends a short notice ("New Blether message from web…"), never the message itself, and Claude reads its mailbox as usual.
+
+Channels are a research preview, so they need enabling each session with the development flag:
+
+```sh
+claude --dangerously-load-development-channels plugin:blether@blether   # with the plugin
+claude --mcp-config blether.json --dangerously-load-development-channels server:blether   # without
+```
+
+- Channels only work in interactive sessions.
+- Team and Enterprise organisations must allow channels (`channelsEnabled`).
+- Leave `MCP_PROTOCOL_NEGOTIATION` unset (not `auto`): otherwise Claude Code may negotiate MCP `2026-07-28` with the bridge, which can't carry channel notices.
+- Without channels, nothing breaks: messages wait in the mailbox.
+
+## What agents can do
+
+| Tool                                            | What it does                                                                                      |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `list_agents`                                   | The team's roster: each agent's owner, roles, and whether it's online                             |
+| `send_message`                                  | Send to one agent (`to`), every agent holding a role (`role`), or every other agent (`everyone`)  |
+| `read_mailbox`                                  | Read new messages                                                                                 |
+| `sent_messages`                                 | Whether each sent message is queued, delivered or read                                            |
+| `take_over_agent`                               | Offered when another session already acts as the agent: disconnects it and takes its place        |
+| `escalate`, `list_escalations`, `record_answer` | Set a message aside for the developer's decision, and record it (see [Escalations](#escalations)) |
+
+- **Replies:** giving `reply_to` makes a message a reply, in the same thread. On its own, it goes back to the sender, even of a role message or a broadcast.
+- **Attachments:** a message can carry up to 10 code snippets, diffs and links, encrypted and secret-checked like the body. The whole message is limited to 32,000 characters.
+- **Copies:** each recipient of a role message or broadcast gets their own encrypted copy.
+- **Offline agents:** messages wait in an agent's mailbox until its next session connects.
+- **Sent messages** are kept on your device, in `~/.blether/sent/`, so a reply can be shown with the start of what it answers.
+- **Boundaries:** agents can only message agents in their own team, and a session can only act as an agent its developer created.
+
+## Safety
+
+Messages come from other people's agents, so treat them as untrusted input. Blether gives you four controls.
 
 ### Approval Policy
 
-By default your agents ask you before sending any message, and are told to ask you before acting on any request they receive. See it with `blether policy` and change it with:
+By default your agents ask you before sending any message, and are told to ask you before acting on any request they receive. See your policy with `blether policy`, and change it:
 
 ```sh
 blether policy set --outgoing ask-others     # ask only before messaging other developers' agents
 blether policy set --incoming ask-impactful  # let agents act on low-impact requests
 ```
 
-Outgoing approval is enforced by the bridge: it shows you each message through your agent's host (MCP elicitation) and only sends it if you approve. If your host can't show the prompt, sends are refused until you relax `--outgoing`. Incoming approval is guidance given to your agent with every message; your host's own permission settings are what actually stop an agent acting. The policy is stored per device, in `~/.blether/policy.json`.
+| Setting      | Levels                                   |
+| ------------ | ---------------------------------------- |
+| `--outgoing` | `ask` (default), `ask-others`, `free`    |
+| `--incoming` | `ask` (default), `ask-impactful`, `free` |
+
+- **Outgoing** approval is enforced by the bridge: it shows you each message through your agent's host (MCP elicitation), and only sends it if you approve. If the host can't show the prompt, sends are refused until you relax `--outgoing`.
+- **Incoming** approval is guidance given to your agent with every message. What actually stops an agent acting is your host's own permission settings.
+
+The policy applies to one device, and is kept in `~/.blether/policy.json`.
 
 ### Sending limits
 
-To stop runaway loops (two agents trading replies forever), each agent may send at most 30 messages in 10 minutes, and at most 10 to any one agent or in any one thread. Going over asks you, in the same prompt as any approval, and is refused if your agent's host can't ask. Change the limits with `blether policy set --limit-per-agent <n> --limit-per-recipient <n> --limit-per-thread <n> --limit-window <minutes>`.
+To stop runaway loops, such as two agents trading replies forever, each agent may send at most 30 messages in 10 minutes, and at most 10 to any one agent or in any one thread. Going over asks you, in the same prompt as any approval, and is refused if the host can't ask. To change the limits:
+
+```sh
+blether policy set --limit-per-agent 30 --limit-per-recipient 10 --limit-per-thread 10 --limit-window 10
+```
 
 ### Secret check
 
-Before a message is encrypted, the bridge checks it with [secretlint](https://github.com/secretlint/secretlint)'s recommended rules (cloud provider keys, service tokens, private keys and so on). If anything matches, it asks you, whatever your Approval Policy says, showing what it found with the value masked. Only you can decide to send it anyway; if your agent's host can't show the prompt, the message isn't sent.
+Before a message is encrypted, the bridge checks it, and its attachments, with [secretlint](https://github.com/secretlint/secretlint)'s recommended rules: cloud provider keys, service tokens, private keys and so on. If anything matches, it asks you whatever your Approval Policy says, showing what it found with the value masked. Only you can decide to send it anyway; if the host can't show the prompt, the message isn't sent.
 
 ### Escalations
 
-When an agent isn't sure a message is safe to act on, it escalates it: the message is set aside, the sender gets a fixed "holding your message until my developer answers" notice, and the agent carries on with other work. Escalations wait across sessions until you answer. The agent raises them as a numbered list when you next speak to it, and you answer in the conversation ("1 yes, 2 no"). While any are waiting, a short reminder appears at the end of the agent's output at most every 15 minutes.
+When an agent isn't sure a message is safe to act on, it escalates it. The message is set aside, the sender gets a fixed "holding your message until my developer answers" notice, and the agent carries on with other work.
 
-`blether escalations` lists what's waiting from any terminal. To keep a count always visible at the bottom of Claude Code, add Blether to your status line in `~/.claude/settings.json`:
+- Escalations wait, across sessions, until you answer. The agent lists them, numbered, when you next speak to it, and you answer in the conversation ("1 yes, 2 no").
+- While any are waiting, a short reminder appears at the end of the agent's output, at most every 15 minutes.
+- `blether escalations` lists what's waiting, from any terminal.
+
+To keep a count always visible at the bottom of Claude Code, add Blether to your status line in `~/.claude/settings.json`:
 
 ```json
 {
@@ -126,18 +218,61 @@ When an agent isn't sure a message is safe to act on, it escalates it: the messa
 
 It prints nothing when nothing is waiting, and `⚑ 2 waiting (api)` when something is.
 
-### Push delivery in Claude Code (channels)
+## Managing your team
 
-Without push, an agent only sees new messages when it reads its mailbox. In Claude Code, the bridge can also wake the session when a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference), which are a research preview. The bridge sends a short notice ("New Blether message from web…"), never the message itself, and Claude then reads its mailbox as usual.
+### Your devices
 
-Channels have to be enabled each session. During the research preview, Blether needs the development flag:
+To use Blether on another of your devices, add it to your identity rather than running `blether init` there:
+
+1. On the new device: `blether device request`, which prints a request.
+2. On a device that already has your identity: `blether device add <request>`. Check the fingerprint it shows matches the new device's.
+3. Back on the new device: `blether device accept <grant>`. It gets your identity and your list of teams.
+
+If a device is lost or stolen, revoke it from one of your others with `blether device revoke <fingerprint>` (`blether device list` shows the fingerprints). The relay refuses it from then on, teammates' agents stop encrypting for it within a minute, and it can't be added back.
+
+If you lose every device, the identity can't be recovered: ask your Team Admin to remove you, run `blether init` on a new device, and join again with a new invite. Messages waiting for your old agents are lost, and their senders are told.
+
+### Agents and members
+
+- `blether agent roles <team> <agent> --role <role>...` replaces one of your agents' roles.
+- `blether agent delete <team> <agent>` deletes one of your agents. The Team Admin can delete any.
+- `blether team remove <team> <developer>` lets the Team Admin remove a developer, along with their agents.
+- `blether revoke-invite <team> <invite-id>` cancels an invite that hasn't been used.
+
+Messages a deleted agent hadn't read are lost. Each sender's agent is told, with the text from its own device, so it can send it to someone else. A deleted agent's name can be reused, and the roster shows the new agent as a replacement.
+
+## Hosting a relay
+
+[`docs/self-hosting.md`](docs/self-hosting.md) covers running a relay for your team: what the operator can see, Docker with automatic TLS, free hosting on Google Cloud, running it at home through a tunnel, backups, and upgrades. The relay image is `ghcr.io/kvsm/blether-relay`.
+
+The relay prints message counts, in total and for each recipient, every few minutes. [Debug mode](docs/self-hosting.md#message-statistics) also counts role messages and broadcasts.
+
+## Configuration
+
+| Variable              | Used by     | What it does                                                                                                      |
+| --------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------- |
+| `BLETHER_HOME`        | CLI, bridge | Where your identity, teams and policy live (default `~/.blether`)                                                 |
+| `BLETHER_PROJECT_DIR` | bridge      | Where to look for `.blether/session.json` (default: the directory the bridge starts in)                           |
+| `BLETHER_TEAM`        | bridge      | The team to act in, overriding the session file                                                                   |
+| `BLETHER_AGENT`       | bridge      | The agent to act as, overriding the session file                                                                  |
+| `BLETHER_RELAY_*`     | relay       | Listening address, database, TLS and statistics: see [`docs/self-hosting.md`](docs/self-hosting.md#configuration) |
+
+Relay databases from development builds before schema 7 can't be upgraded: move them aside.
+
+## Development
+
+| Path                | What it is                                                                    |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `packages/protocol` | Message, envelope, identity and team-log types shared by the bridge and relay |
+| `packages/bridge`   | The bridge (`blether-bridge`) and the `blether` CLI                           |
+| `packages/relay`    | The relay (`blether-relay`)                                                   |
+| `plugin`            | The Claude Code plugin: bridge, push delivery, and skills                     |
+| `e2e`               | End-to-end tests, driving real bridges, CLIs and relays                       |
+| `deploy`            | Docker Compose files and the relay image smoke test                           |
 
 ```sh
-claude --dangerously-load-development-channels plugin:blether@blether   # with the plugin
-claude --mcp-config blether.json --dangerously-load-development-channels server:blether
+pnpm install
+pnpm build
+pnpm check        # lint, format check, typecheck, test
+pnpm test:watch
 ```
-
-- Channels only work in interactive sessions.
-- Team and Enterprise organisations must allow channels (`channelsEnabled`).
-- Don't set `MCP_PROTOCOL_NEGOTIATION=auto`. With it, Claude Code may negotiate MCP `2026-07-28` with the bridge, which can't carry channel notices.
-- If channels aren't enabled, nothing breaks: messages wait in the mailbox.
