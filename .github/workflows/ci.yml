@@ -25,3 +25,6 @@ jobs:
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm test
+      # The npm package: bundle the CLI and bridge, and check they run alone.
+      - run: pnpm build
+      - run: pnpm --filter @kvsm/blether smoke

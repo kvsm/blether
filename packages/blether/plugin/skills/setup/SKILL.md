@@ -6,13 +6,7 @@ disable-model-invocation: true
 
 # Set up Blether for this project
 
-Walk the developer through each step in order, running the commands yourself and showing what they print. Every command below is the Blether CLI:
-
-```sh
-node "${user_config.blether_dir}/packages/bridge/dist/cli-bin.js" <command>
-```
-
-Write it as `blether <command>` when you explain things to the developer, and run the full form above.
+Walk the developer through each step in order, running the commands yourself and showing what they print. Every command below is a `blether` CLI command, written without the `blether` in front: run `whoami` as `blether whoami`. The plugin puts `blether` on your Bash `PATH`.
 
 Identity and team membership are the developer's own decisions: run what they ask for, and leave invites, joins, removals and device changes to them when you're unsure.
 

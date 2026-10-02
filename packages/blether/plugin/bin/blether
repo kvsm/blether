@@ -1,0 +1,4 @@
+#!/bin/sh
+# Puts the plugin's own blether CLI on the agent's Bash PATH while the plugin
+# is enabled, so skills can run `blether` however Blether was installed.
+exec node "$(dirname "$0")/../dist/cli.js" "$@"
