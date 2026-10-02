@@ -46,7 +46,7 @@ describe("teams through the blether CLI", () => {
 
     const joined = await carol.run("join", invite);
     expect(joined).toMatchObject({ code: 0 });
-    expect(joined.out).toContain("BLETHER_TEAM=backend");
+    expect(joined.out).toContain("blether use backend <name>");
 
     const members = await carol.run("team", "members", "backend");
     expect(members.out).toBe("Team backend:\n  Kev (Team Admin)\n  Carol");

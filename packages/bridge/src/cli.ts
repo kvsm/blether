@@ -52,6 +52,7 @@ import {
   PolicyStore,
 } from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
+import { writeSessionFile } from "./session-file.js";
 
 /**
  * The `blether` command. Everything that changes who a developer is, or who
@@ -82,6 +83,7 @@ Commands:
                                      Replace the roles of one of your agents
   agent list <team>                  Show the team's agents and who is online
   agent delete <team> <name>         Delete one of your agents (or any, as Team Admin)
+  use <team> <agent> [--dir <path>]  Make sessions started in this project (or <path>) act as <agent>
   escalations                        List messages your agents are holding for your decision
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
@@ -106,6 +108,8 @@ export interface CliContext {
   teams: TeamDirectory;
   io: CliIo;
   now?: () => Date;
+  /** Where `blether use` writes by default. Defaults to the working directory. */
+  cwd?: string;
 }
 
 /** A failure to report to the user, with no stack trace. */
@@ -122,6 +126,7 @@ export async function runCli(
     teams: context.teams ?? new TeamDirectory(store.home),
     io: context.io ?? { out: console.log, err: console.error },
     ...(context.now ? { now: context.now } : {}),
+    ...(context.cwd ? { cwd: context.cwd } : {}),
   };
   try {
     return await dispatch(argv, ctx);
@@ -201,6 +206,8 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
         `Unknown device command: ${sub ?? "(none)"}\n\n${USAGE}`,
       );
     }
+    case "use":
+      return use(rest, ctx);
     case "invite":
       return invite(rest, ctx);
     case "revoke-invite":
@@ -784,9 +791,7 @@ async function agentCreate(args: string[], ctx: CliContext): Promise<number> {
     );
   });
   ctx.io.out(`Created agent ${name} in ${record.name}.`);
-  ctx.io.out(
-    `Point a bridge at it with BLETHER_TEAM=${record.name} BLETHER_AGENT=${name}.`,
-  );
+  ctx.io.out(`Use it in a project with: blether use ${record.name} ${name}`);
   return 0;
 }
 
@@ -906,6 +911,46 @@ async function agentDelete(args: string[], ctx: CliContext): Promise<number> {
   });
   ctx.io.out(
     `Deleted agent ${name} from ${record.name}. Unread messages to it are lost, and their senders will be told. The name can be used again.`,
+  );
+  return 0;
+}
+
+async function use(args: string[], ctx: CliContext): Promise<number> {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { dir: { type: "string" } },
+  });
+  const usage = "Usage: blether use <team> <agent> [--dir <path>]";
+  if (positionals.length === 0) throw new CliError(usage);
+  const record = loadTeam(ctx.teams, positionals[0]);
+  const name = parseName(AgentName, positionals[1], usage);
+  const credentials = loadCredentials(ctx.store);
+  const me = verifyIdentityLog(credentials.identity).id;
+
+  const { team } = await withRelay(ctx, record.relayUrl, credentials, (relay) =>
+    relay.getTeam(record.id),
+  );
+  const agent = team.agents.find((a) => a.name === name);
+  if (!agent) {
+    throw new CliError(
+      `${record.name} has no agent called ${name}. Create it with: blether agent create ${record.name} ${name}`,
+    );
+  }
+  if (agent.owner !== me) {
+    throw new CliError(
+      `${name} belongs to another developer. Use one of yours (blether agent list ${record.name}), or create one.`,
+    );
+  }
+  const path = writeSessionFile(values.dir ?? ctx.cwd ?? process.cwd(), {
+    team: record.name,
+    agent: name,
+  });
+  ctx.io.out(
+    `Sessions started in this project will act as ${name} in ${record.name}.`,
+  );
+  ctx.io.out(
+    `Wrote ${path}; it's ignored by git, since the agent is yours. Restart any session already running here.`,
   );
   return 0;
 }
@@ -1036,7 +1081,9 @@ async function join(args: string[], ctx: CliContext): Promise<number> {
 
   ctx.teams.save(record);
   ctx.io.out(`Joined ${record.name}.`);
-  ctx.io.out(`Point a bridge at it with BLETHER_TEAM=${record.name}.`);
+  ctx.io.out(
+    `Create an agent with: blether agent create ${record.name} <name>, then run blether use ${record.name} <name> in your project.`,
+  );
   return 0;
 }
 
