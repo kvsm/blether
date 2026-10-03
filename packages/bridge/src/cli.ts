@@ -278,7 +278,7 @@ function init(args: string[], { store, io }: CliContext): number {
   const name = DeveloperName.safeParse(values.name);
   if (!name.success) {
     throw new CliError(
-      'Give your name, as teammates will see it: blether init --name <name>',
+      "Give your name, as teammates will see it: blether init --name <name>",
     );
   }
   if (store.exists()) {
