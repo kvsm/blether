@@ -1,3 +1,6 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join as joinPath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
@@ -56,9 +59,12 @@ import { writeSessionFile } from "./session-file.js";
 import {
   HOOK_EVENTS,
   hookOutput,
+  mailboxMark,
   projectInboxPath,
+  waitForFreshInbox,
   watchInbox,
 } from "./watch.js";
+import { readInboxState } from "./inbox-file.js";
 import {
   PLUGIN_ID,
   installClaudePlugin,
@@ -128,6 +134,10 @@ export interface CliContext {
   cwd?: string;
   /** Reads standard input, for `blether hook`. */
   readStdin?: () => Promise<string>;
+  /** The environment, for `blether hook` to tell which Claude Code host runs it. */
+  env?: NodeJS.ProcessEnv;
+  /** This script's path, for the watch command `blether hook` gives the agent. */
+  script?: string;
   /** Runs the `claude` CLI, for `blether claude install`. */
   claude?: ClaudeRunner;
   /** The installed package's root, for `blether claude install`. Found from this file by default. */
@@ -985,22 +995,69 @@ async function hook(args: string[], ctx: CliContext): Promise<number> {
   if (!event) {
     throw new CliError(`Usage: blether hook <${HOOK_EVENTS.join(" | ")}>`);
   }
-  // Claude Code passes the hook's input, including the session's directory.
+  const started = new Date();
+  // Claude Code passes the hook's input: the session's directory and id, and
+  // for SessionStart, why the session started.
   let cwd = ctx.cwd ?? process.cwd();
+  let sessionId: string | undefined;
+  let source: string | undefined;
   try {
     const input = JSON.parse(
       (await (ctx.readStdin ?? readAllStdin)()) || "{}",
-    ) as { cwd?: unknown };
+    ) as { cwd?: unknown; session_id?: unknown; source?: unknown };
     if (typeof input.cwd === "string") cwd = input.cwd;
+    if (typeof input.session_id === "string") sessionId = input.session_id;
+    if (typeof input.source === "string") source = input.source;
   } catch {
     // No usable input: use the working directory.
   }
-  const output = hookOutput(
+  const path = projectInboxPath(cwd, ctx.store.home, ctx.teams);
+  if (!path) return 0;
+  if (event === "SessionStart") await waitForFreshInbox(path, started);
+  const state = readInboxState(path);
+  const told = toldFile(sessionId);
+  // Plugin monitors run in the terminal CLI only; elsewhere the agent starts
+  // its own watch. Background tasks outlive compaction and /clear, so only a
+  // new or resumed session needs one.
+  const env = ctx.env ?? process.env;
+  const script = ctx.script ?? process.argv[1];
+  const needsWatch =
+    event === "SessionStart" &&
+    env.CLAUDE_CODE_ENTRYPOINT !== "cli" &&
+    (source === undefined || source === "startup" || source === "resume") &&
+    script !== undefined;
+  const output = hookOutput({
     event,
-    projectInboxPath(cwd, ctx.store.home, ctx.teams),
-  );
+    state,
+    told: told ? readToldMark(told) : undefined,
+    watchCommand: needsWatch ? `node "${script}" watch` : undefined,
+  });
+  if (told) writeToldMark(told, mailboxMark(state));
   if (output) ctx.io.out(output);
   return 0;
+}
+
+/** Where a session's hooks remember what they've told the agent. */
+function toldFile(sessionId: string | undefined): string | undefined {
+  if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
+  return joinPath(tmpdir(), "blether-hooks", sessionId);
+}
+
+function readToldMark(file: string): string | undefined {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function writeToldMark(file: string, mark: string) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, mark);
+  } catch {
+    // Then the next prompt repeats the notice: noisy, not wrong.
+  }
 }
 
 async function readAllStdin(): Promise<string> {
