@@ -66,7 +66,6 @@ import {
 } from "./watch.js";
 import { readInboxState } from "./inbox-file.js";
 import {
-  PLUGIN_ID,
   installClaudePlugin,
   packageRoot,
   runClaude,
@@ -1086,9 +1085,6 @@ async function claudeInstall(ctx: CliContext): Promise<number> {
   }
   ctx.io.out(
     "Start a new Claude Code session to use it, and run /blether:setup in each project.",
-  );
-  ctx.io.out(
-    `For push delivery, start sessions with: claude --dangerously-load-development-channels plugin:${PLUGIN_ID}`,
   );
   return 0;
 }
