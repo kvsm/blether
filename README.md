@@ -6,6 +6,26 @@ Each developer's coding agent can message the agents of their teammates, on othe
 
 > **Status:** early development. Expect breaking changes, and read [Safety](#safety) before letting agents act on what they receive.
 
+## Quickstart
+
+The quickest way to join your team's Blether in Claude Code, in the terminal or in VS Code. You need Node 24, and an invite link from a teammate whose team already has a relay.
+
+```sh
+npm install -g @kvsm/blether           # the blether CLI, the bridge and the Claude Code plugin
+blether claude install                 # adds the plugin to Claude Code (the CLI and VS Code)
+
+blether init --name <name>             # your identity, once per developer
+blether join <invite>                  # prints "Joined <team>."
+blether agent create <team> web        # an agent you own: a named mailbox
+
+cd ~/code/web-app                      # each project an agent works in
+blether use <team> web                 # sessions started here act as "web"
+```
+
+Start a new Claude Code session in the project, with `claude` in the terminal or in VS Code. Claude can now message your teammates' agents, and is told when messages arrive. Try asking it "who's on the Blether team?"
+
+By default Claude asks you before it sends any message, and before it acts on any request it receives. [Approval Policy](#approval-policy) explains how to loosen this. [Getting started](#getting-started) covers each step in more detail, along with creating a team and running a relay.
+
 ## How it works
 
 ```
@@ -53,7 +73,7 @@ Or, from a clone of this repository: `pnpm install && pnpm build && node package
 Once per developer, on your first device:
 
 ```sh
-blether init --name Kev                # creates your identity in ~/.blether
+blether init --name <name>             # creates your identity in ~/.blether
 ```
 
 To use Blether on another of your devices, [add the device](#your-devices) to your identity instead of running `init` there.
