@@ -6,6 +6,26 @@ Each developer's coding agent can message the agents of their teammates, on othe
 
 > **Status:** early development. Expect breaking changes, and read [Safety](#safety) before letting agents act on what they receive.
 
+## Quickstart
+
+The quickest way to join your team's Blether in Claude Code, in the terminal or in VS Code. You need Node 24, and an invite link from a teammate whose team already has a relay.
+
+```sh
+npm install -g @kvsm/blether           # the blether CLI, the bridge and the Claude Code plugin
+blether claude install                 # adds the plugin to Claude Code (the CLI and VS Code)
+
+blether init --name <name>             # your identity, once per developer
+blether join <invite>                  # prints "Joined <team>."
+blether agent create <team> web        # an agent you own: a named mailbox
+
+cd ~/code/web-app                      # each project an agent works in
+blether use <team> web                 # sessions started here act as "web"
+```
+
+Start a new Claude Code session in the project, with `claude` in the terminal or in VS Code. Claude can now message your teammates' agents, and is told when messages arrive. Try asking it "who's on the Blether team?"
+
+By default Claude asks you before it sends any message, and before it acts on any request it receives. [Approval Policy](#approval-policy) explains how to loosen this. [Getting started](#getting-started) covers each step in more detail, along with creating a team and running a relay.
+
 ## How it works
 
 ```
@@ -53,7 +73,7 @@ Or, from a clone of this repository: `pnpm install && pnpm build && node package
 Once per developer, on your first device:
 
 ```sh
-blether init --name Kev                # creates your identity in ~/.blether
+blether init --name <name>             # creates your identity in ~/.blether
 ```
 
 To use Blether on another of your devices, [add the device](#your-devices) to your identity instead of running `init` there.
@@ -95,16 +115,22 @@ blether use backend web                # writes .blether/session.json, which git
 
 #### Claude Code
 
-The Blether plugin adds the bridge, push delivery, and two skills:
+The Blether plugin adds the bridge, new-mail notices, and two skills:
 
 - **`blether`**: Claude uses it on its own, to decide when to message teammates' agents and how to write to them.
-- **`/blether:setup`**: walks you through steps 3 to 5 for a project, and the extras below.
+- **`/blether:setup`**: walks you through steps 3 to 5 for a project, and offers a status line for escalations.
 
 ```sh
 blether claude install       # adds the plugin to Claude Code, from the installed package
 ```
 
 Start a new session in the project, and the bridge acts as the agent its `.blether/session.json` names. The plugin also puts `blether` on Claude's Bash `PATH`, so Claude can run the CLI for you.
+
+The plugin tells Claude when messages arrive. It sends a short notice ("New Blether message from web…"), never the message itself, and Claude reads its mailbox as usual:
+
+- **In the terminal**, a plugin monitor wakes an idle session as soon as a message arrives.
+- **In the VS Code extension**, plugin monitors don't run, so Claude starts the same watch itself on its first turn. Before your first prompt, nothing can wake the session; mail that arrived is mentioned with that prompt.
+- **On each prompt**, Claude is told about new mail it hasn't heard about yet.
 
 #### Other agents
 
@@ -122,15 +148,14 @@ The bridge looks for `.blether/session.json` in the directory the agent starts i
 
 If anything's wrong at start-up (no identity, an unknown team, a relay that can't be reached), the bridge still starts, offering a single `blether_status` tool that explains the problem, so the agent can tell you.
 
-### 7. Optional: push delivery in Claude Code
+### 7. Optional: push delivery in Claude Code without the plugin
 
-Without push, an agent sees new messages when it next checks its mailbox (it's told to at the start of a session, before starting a task, and before committing or pushing). In Claude Code, the bridge can also wake the session as soon as a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference). The bridge sends a short notice ("New Blether message from web…"), never the message itself, and Claude reads its mailbox as usual.
+Without the plugin, an agent sees new messages when it next checks its mailbox (it's told to at the start of a session, before starting a task, and before committing or pushing). If you run the bridge in Claude Code without the plugin, it can also wake the session as soon as a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference). The plugin doesn't use channels: its notices do the same job without a development flag.
 
 Channels are a research preview, so they need enabling each session with the development flag:
 
 ```sh
-claude --dangerously-load-development-channels plugin:blether@blether   # with the plugin
-claude --mcp-config blether.json --dangerously-load-development-channels server:blether   # without
+claude --mcp-config blether.json --dangerously-load-development-channels server:blether
 ```
 
 - Channels only work in interactive sessions.

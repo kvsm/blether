@@ -207,6 +207,7 @@ export class RelayConnection {
    */
   identity: IdentityLog | undefined;
   private readonly arrivalListeners = new Set<(item: MailboxItem) => void>();
+  private readonly readListeners = new Set<() => void>();
 
   private constructor(
     private readonly socket: WebSocket,
@@ -445,6 +446,12 @@ export class RelayConnection {
     return [...new Set(from)];
   }
 
+  /** Calls `listener` after each mailbox read. Returns a function that unsubscribes. */
+  onRead(listener: () => void): () => void {
+    this.readListeners.add(listener);
+    return () => this.readListeners.delete(listener);
+  }
+
   /** Calls `listener` whenever a new message arrives. Returns a function that unsubscribes. */
   onArrival(listener: (item: MailboxItem) => void): () => void {
     this.arrivalListeners.add(listener);
@@ -476,6 +483,7 @@ export class RelayConnection {
     if (read.length > 0 && this.socket.readyState === WebSocket.OPEN) {
       this.write({ type: "read", ids: read });
     }
+    for (const listener of this.readListeners) listener();
     return items;
   }
 

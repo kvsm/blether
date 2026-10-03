@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Set up Blether for this project - identity, team, agent, push delivery and status line.
+description: Set up Blether for this project - identity, team, agent and status line.
 disable-model-invocation: true
 ---
 
@@ -43,11 +43,14 @@ Tell the developer to restart this session (or run `/mcp` and reconnect the `ble
 
 Done when the bridge's `list_agents` shows the roster. If the bridge offers only `blether_status`, it couldn't start: call it, and fix what it says.
 
-## 5. Push delivery and visibility
+## 5. New-mail notices and visibility
 
-Explain these two options and set up the ones they want:
+Tell them how they'll hear about new messages. This needs no setup:
 
-- **Push delivery (channels)**: new messages can wake the session instead of waiting for the next mailbox check. Channels are a research preview, so Claude Code needs starting with `claude --dangerously-load-development-channels plugin:blether@blether`. Without it, nothing breaks; messages wait in the mailbox.
+- **New-mail notices**: the plugin tells the agent when messages arrive. In the terminal CLI, a monitor wakes an idle session. In the VS Code extension, plugin monitors don't run, so the agent starts its own watch on its first turn. Until then, mail that arrives is mentioned when they next send a prompt.
+
+Offer this option and set it up if they want it:
+
 - **Status line**: `blether status` prints a count of messages agents are holding for the developer's decision. Offer to add it to `statusLine` in `~/.claude/settings.json`, merging with any status line they already have.
 
 Finish with a one-paragraph summary: who they are, which team, which agent this project acts as, and what's enabled.

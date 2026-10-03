@@ -12,6 +12,7 @@ import {
 import { EscalationStore } from "./escalations.js";
 import { PolicyStore } from "./policy.js";
 import { SentLog } from "./sent-log.js";
+import { InboxFile, inboxPath } from "./inbox-file.js";
 import { SessionFileError, findSessionFile } from "./session-file.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { createBridgeServer, createSetupProblemServer } from "./server.js";
@@ -214,6 +215,7 @@ async function open(
   if (relay.identity && relay.identity.length > credentials.identity.length) {
     store.saveIdentity(relay.identity);
   }
+  keepInboxFile(relay, new InboxFile(inboxPath(store.home, team.id, agent)));
   const bridge = createBridgeServer(relay, {
     policy: new PolicyStore(store.home).load(),
     escalations: new EscalationStore(store.home, team.id, agent),
@@ -221,4 +223,36 @@ async function open(
     ...(server ? { server } : {}),
   });
   return { server: bridge, connection: relay };
+}
+
+/**
+ * Keeps the agent's inbox state file up to date, for hosts without channels
+ * (`blether watch` and the Claude Code plugin's hooks read it). It's a
+ * convenience: a failure to write it never affects messaging.
+ */
+function keepInboxFile(relay: RelayConnection, inbox: InboxFile) {
+  const attempt = (write: () => void) => {
+    try {
+      write();
+    } catch {
+      // The next change tries again.
+    }
+  };
+  relay.onArrival((item) =>
+    attempt(() =>
+      inbox.arrived(
+        item.kind === "lost" ? undefined : item.from,
+        relay.unreadCount,
+        relay.unreadFrom(),
+      ),
+    ),
+  );
+  relay.onRead(() =>
+    attempt(() => inbox.write(relay.unreadCount, relay.unreadFrom())),
+  );
+  void relay
+    .settled()
+    .then(() =>
+      attempt(() => inbox.write(relay.unreadCount, relay.unreadFrom())),
+    );
 }
