@@ -1,6 +1,3 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join as joinPath } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import {
@@ -56,15 +53,7 @@ import {
 } from "./policy.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
 import { writeSessionFile } from "./session-file.js";
-import {
-  HOOK_EVENTS,
-  hookOutput,
-  mailboxMark,
-  projectInboxPath,
-  waitForFreshInbox,
-  watchInbox,
-} from "./watch.js";
-import { readInboxState } from "./inbox-file.js";
+import { watchInbox } from "./watch.js";
 import {
   installClaudePlugin,
   packageRoot,
@@ -103,8 +92,9 @@ Commands:
   agent delete <team> <name>         Delete one of your agents (or any, as Team Admin)
   use <team> <agent> [--dir <path>]  Make sessions started in this project (or <path>) act as <agent>
   claude install                     Install (or update) the Blether plugin in Claude Code
-  watch [--dir <path>]               Print a line whenever this project's agent gets mail (for a plugin monitor)
-  hook <event>                       Answer a Claude Code hook (UserPromptSubmit, SessionStart) with the unread count
+  watch --inbox <path> --session <id>
+                                     Print a line whenever a connected session's agent gets mail
+                                     (the bridge gives its agent this command when it connects)
   escalations                        List messages your agents are holding for your decision
   status                             One line for your Claude Code status line: escalations waiting
   policy                             Show your Approval Policy on this device
@@ -131,12 +121,6 @@ export interface CliContext {
   now?: () => Date;
   /** Where `blether use` writes by default. Defaults to the working directory. */
   cwd?: string;
-  /** Reads standard input, for `blether hook`. */
-  readStdin?: () => Promise<string>;
-  /** The environment, for `blether hook` to tell which Claude Code host runs it. */
-  env?: NodeJS.ProcessEnv;
-  /** This script's path, for the watch command `blether hook` gives the agent. */
-  script?: string;
   /** Runs the `claude` CLI, for `blether claude install`. */
   claude?: ClaudeRunner;
   /** The installed package's root, for `blether claude install`. Found from this file by default. */
@@ -159,7 +143,6 @@ export async function runCli(
     ...(context.now ? { now: context.now } : {}),
     ...(context.cwd ? { cwd: context.cwd } : {}),
     ...(context.claude ? { claude: context.claude } : {}),
-    ...(context.readStdin ? { readStdin: context.readStdin } : {}),
     ...("packageRoot" in context ? { packageRoot: context.packageRoot } : {}),
   };
   try {
@@ -244,8 +227,6 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       return use(rest, ctx);
     case "watch":
       return watch(rest, ctx);
-    case "hook":
-      return hook(rest, ctx);
     case "claude": {
       const [sub] = rest;
       if (sub === "install") return claudeInstall(ctx);
@@ -961,109 +942,30 @@ async function agentDelete(args: string[], ctx: CliContext): Promise<number> {
 }
 
 async function watch(args: string[], ctx: CliContext): Promise<number> {
-  const { values } = parseArgs({ args, options: { dir: { type: "string" } } });
-  const dir = values.dir ?? ctx.cwd ?? process.cwd();
-  const find = () => projectInboxPath(dir, ctx.store.home, ctx.teams);
-  let stop = () => {};
-  // Until `blether use` chooses an agent there's nothing to watch: wait
-  // quietly (on stderr, which isn't a notification) and check again.
-  let path = find();
-  if (!path) {
-    ctx.io.err(
-      "No Blether agent is chosen for this project yet (`blether use <team> <agent>`); waiting.",
-    );
+  const { values } = parseArgs({
+    args,
+    options: { inbox: { type: "string" }, session: { type: "string" } },
+  });
+  if (!values.inbox || !values.session) {
+    throw new CliError("Usage: blether watch --inbox <path> --session <id>");
   }
-  const waiting = setInterval(() => {
-    if (path) return;
-    path = find();
-    if (path) stop = watchInbox(path, ctx.io.out);
-  }, 5000);
-  if (path) stop = watchInbox(path, ctx.io.out);
-  await new Promise<void>((resolve) => {
+  const ended = await new Promise<string>((resolve) => {
+    const stop = watchInbox(values.inbox!, values.session!, ctx.io.out, (why) =>
+      resolve(
+        why === "taken-over"
+          ? "Blether watch stopped: another session took over this agent."
+          : "Blether watch stopped: this session disconnected from Blether.",
+      ),
+    );
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
-      process.once(signal, () => resolve());
+      process.once(signal, () => {
+        stop();
+        resolve("");
+      });
     }
   });
-  clearInterval(waiting);
-  stop();
+  if (ended) ctx.io.out(ended);
   return 0;
-}
-
-async function hook(args: string[], ctx: CliContext): Promise<number> {
-  const event = HOOK_EVENTS.find((e) => e === args[0]);
-  if (!event) {
-    throw new CliError(`Usage: blether hook <${HOOK_EVENTS.join(" | ")}>`);
-  }
-  const started = new Date();
-  // Claude Code passes the hook's input: the session's directory and id, and
-  // for SessionStart, why the session started.
-  let cwd = ctx.cwd ?? process.cwd();
-  let sessionId: string | undefined;
-  let source: string | undefined;
-  try {
-    const input = JSON.parse(
-      (await (ctx.readStdin ?? readAllStdin)()) || "{}",
-    ) as { cwd?: unknown; session_id?: unknown; source?: unknown };
-    if (typeof input.cwd === "string") cwd = input.cwd;
-    if (typeof input.session_id === "string") sessionId = input.session_id;
-    if (typeof input.source === "string") source = input.source;
-  } catch {
-    // No usable input: use the working directory.
-  }
-  const path = projectInboxPath(cwd, ctx.store.home, ctx.teams);
-  if (!path) return 0;
-  if (event === "SessionStart") await waitForFreshInbox(path, started);
-  const state = readInboxState(path);
-  const told = toldFile(sessionId);
-  // Plugin monitors run in the terminal CLI only; elsewhere the agent starts
-  // its own watch. Background tasks outlive compaction and /clear, so only a
-  // new or resumed session needs one.
-  const env = ctx.env ?? process.env;
-  const script = ctx.script ?? process.argv[1];
-  const needsWatch =
-    event === "SessionStart" &&
-    env.CLAUDE_CODE_ENTRYPOINT !== "cli" &&
-    (source === undefined || source === "startup" || source === "resume") &&
-    script !== undefined;
-  const output = hookOutput({
-    event,
-    state,
-    told: told ? readToldMark(told) : undefined,
-    watchCommand: needsWatch ? `node "${script}" watch` : undefined,
-  });
-  if (told) writeToldMark(told, mailboxMark(state));
-  if (output) ctx.io.out(output);
-  return 0;
-}
-
-/** Where a session's hooks remember what they've told the agent. */
-function toldFile(sessionId: string | undefined): string | undefined {
-  if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId)) return undefined;
-  return joinPath(tmpdir(), "blether-hooks", sessionId);
-}
-
-function readToldMark(file: string): string | undefined {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return undefined;
-  }
-}
-
-function writeToldMark(file: string, mark: string) {
-  try {
-    mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, mark);
-  } catch {
-    // Then the next prompt repeats the notice: noisy, not wrong.
-  }
-}
-
-async function readAllStdin(): Promise<string> {
-  if (process.stdin.isTTY) return "";
-  let text = "";
-  for await (const chunk of process.stdin) text += String(chunk);
-  return text;
 }
 
 async function claudeInstall(ctx: CliContext): Promise<number> {

@@ -27,7 +27,7 @@ A named participant in exactly one team, created deliberately by the developer w
 _Avoid_: Bot, assistant, peer, teammate
 
 **Session**:
-A live run of an AI coding tool (for example, a Claude Code session) on a developer's device, acting as one of that developer's agents. At most one session acts as a given agent at a time.
+A live run of an AI coding tool (for example, a Claude Code session) on a developer's device, acting as one of that developer's agents. At most one session acts as a given agent at a time. In Claude Code, a session acts as its agent only once the developer connects it (ADR 0008); until then it has nothing to do with Blether.
 _Avoid_: Instance, process
 
 **Role**:
@@ -57,7 +57,7 @@ What the sender can see of a message's progress: queued, delivered, read, or los
 _Avoid_: Receipt, acknowledgement
 
 **Mailbox**:
-An agent's queue of messages it has not yet read. Messages wait there while no session is acting as that agent. A new session reads and assesses everything pending before deciding what to do. Deleting an agent deletes its mailbox, and any unread messages in it become lost.
+An agent's queue of messages it has not yet read. Messages wait there while no session is acting as that agent. A session that starts acting as the agent reads and assesses everything pending before deciding what to do. Deleting an agent deletes its mailbox, and any unread messages in it become lost.
 _Avoid_: Inbox, queue
 
 **Relay**:

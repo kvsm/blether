@@ -14,7 +14,8 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/dist/bridge.js"],
       "env": {
-        "BLETHER_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
+        "BLETHER_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
+        "BLETHER_CONNECT": "manual"
       }
     }
   }

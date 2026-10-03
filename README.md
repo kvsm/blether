@@ -22,7 +22,7 @@ cd ~/code/web-app                      # each project an agent works in
 blether use <team> web                 # sessions started here act as "web"
 ```
 
-Start a new Claude Code session in the project, with `claude` in the terminal or in VS Code. Claude can now message your teammates' agents, and is told when messages arrive. Try asking it "who's on the Blether team?"
+Start a new Claude Code session in the project, with `claude` in the terminal or in VS Code, and run `/blether:connect`. Claude can now message your teammates' agents, and is told when messages arrive. Try asking it "who's on the Blether team?" Sessions you don't connect leave Blether out entirely.
 
 By default Claude asks you before it sends any message, and before it acts on any request it receives. [Approval Policy](#approval-policy) explains how to loosen this. [Getting started](#getting-started) covers each step in more detail, along with creating a team and running a relay.
 
@@ -115,22 +115,25 @@ blether use backend web                # writes .blether/session.json, which git
 
 #### Claude Code
 
-The Blether plugin adds the bridge, new-mail notices, and two skills:
+The Blether plugin adds the bridge, new-mail notices, and these skills:
 
-- **`blether`**: Claude uses it on its own, to decide when to message teammates' agents and how to write to them.
-- **`/blether:setup`**: walks you through steps 3 to 5 for a project, and offers a status line for escalations.
+- **`/blether:connect`** and **`/blether:disconnect`**: connect a session to Blether, and disconnect it.
+- **`blether`**: in a connected session, Claude uses it on its own, to decide when to message teammates' agents and how to write to them.
+- **`/blether:setup`**: walks you through steps 3 to 5 for a project, connects the session, and offers a status line for escalations.
 
 ```sh
 blether claude install       # adds the plugin to Claude Code, from the installed package
 ```
 
-Start a new session in the project, and the bridge acts as the agent its `.blether/session.json` names. The plugin also puts `blether` on Claude's Bash `PATH`, so Claude can run the CLI for you.
+The plugin also puts `blether` on Claude's Bash `PATH`, so Claude can run the CLI for you.
 
-The plugin tells Claude when messages arrive. It sends a short notice ("New Blether message from web…"), never the message itself, and Claude reads its mailbox as usual:
+Sessions start without Blether: the bridge doesn't connect to the relay, Claude has no Blether tools, and nothing about Blether is added to the conversation. Your agent shows as offline to teammates. When you want a session to work with your team, run `/blether:connect`:
 
-- **In the terminal**, a plugin monitor wakes an idle session as soon as a message arrives.
-- **In the VS Code extension**, plugin monitors don't run, so Claude starts the same watch itself on its first turn. Before your first prompt, nothing can wake the session; mail that arrived is mentioned with that prompt.
-- **On each prompt**, Claude is told about new mail it hasn't heard about yet.
+- The bridge connects as the agent the project's `.blether/session.json` names, and Claude gets its Blether tools.
+- Claude reads its mailbox, then starts a watch (with Claude Code's Monitor tool) that wakes the session whenever a message arrives, in the terminal and in VS Code. The watch sends a short notice ("New Blether message from web…"), never the message itself.
+- Only one session can be connected as an agent at a time. Connecting another session takes the agent over, and the first one is disconnected.
+
+`/blether:disconnect`, or ending the session, disconnects it.
 
 #### Other agents
 
@@ -150,7 +153,7 @@ If anything's wrong at start-up (no identity, an unknown team, a relay that can'
 
 ### 7. Optional: push delivery in Claude Code without the plugin
 
-Without the plugin, an agent sees new messages when it next checks its mailbox (it's told to at the start of a session, before starting a task, and before committing or pushing). If you run the bridge in Claude Code without the plugin, it can also wake the session as soon as a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference). The plugin doesn't use channels: its notices do the same job without a development flag.
+Without the plugin, the bridge connects as soon as the agent starts it, and an agent sees new messages when it next checks its mailbox (it's told to at the start of a session, before starting a task, and before committing or pushing). If you run the bridge in Claude Code without the plugin, it can also wake the session as soon as a message arrives, using [channels](https://code.claude.com/docs/en/channels-reference). The plugin doesn't use channels: its notices do the same job without a development flag.
 
 Channels are a research preview, so they need enabling each session with the development flag:
 

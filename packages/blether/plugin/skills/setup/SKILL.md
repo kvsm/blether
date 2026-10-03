@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Set up Blether for this project - identity, team, agent and status line.
+description: Set up Blether for this project - identity, team, agent and status line - and connect this session.
 disable-model-invocation: true
 ---
 
@@ -37,17 +37,17 @@ Then run `use <team> <agent>` in the project root. It writes `.blether/session.j
 
 Done when `use` reports the agent for this project.
 
-## 4. Reload and check
+## 4. Connect and check
 
-Tell the developer to restart this session (or run `/mcp` and reconnect the `blether` server) so the bridge picks up the project's agent.
+Setting Blether up is a request to use it, so connect this session: call the bridge's `connect` tool (`mcp__plugin_blether_blether__connect`; load it with ToolSearch first if it's deferred). It reads the project's agent when called, so there's no need to restart.
 
-Done when the bridge's `list_agents` shows the roster. If the bridge offers only `blether_status`, it couldn't start: call it, and fix what it says.
+Done when it connects and its result's instructions are followed (read the mailbox, start the watch). If it fails, fix what it says.
 
-## 5. New-mail notices and visibility
+## 5. How it works, and visibility
 
-Tell them how they'll hear about new messages. This needs no setup:
+Tell them how Blether works from now on:
 
-- **New-mail notices**: the plugin tells the agent when messages arrive. In the terminal CLI, a monitor wakes an idle session. In the VS Code extension, plugin monitors don't run, so the agent starts its own watch on its first turn. Until then, mail that arrives is mentioned when they next send a prompt.
+- **Sessions start without Blether.** The bridge stays out of every session until they run `/blether:connect`. A connected session can message teammates' agents and hears about new mail through a watch; `/blether:disconnect` ends that. Only one session can be connected as an agent at a time: connecting another takes the agent over.
 
 Offer this option and set it up if they want it:
 

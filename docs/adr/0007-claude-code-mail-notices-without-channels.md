@@ -1,5 +1,7 @@
 # In Claude Code, the plugin tells agents about mail with a monitor and hooks, not channels
 
+> Superseded by [ADR 0008](0008-claude-code-sessions-connect-explicitly.md): sessions now connect explicitly, and the plugin monitor and hooks are gone.
+
 An agent only sees a message once its host puts something into its context (ADR 0003). Claude Code channels can wake an idle session, but they're a research preview: each session needs `--dangerously-load-development-channels`, organisations must allow them, and they can't be enabled in the VS Code extension. Asking every developer to start Claude Code with a "dangerously" flag is a poor default.
 
 So the Claude Code plugin tells the agent about mail itself:

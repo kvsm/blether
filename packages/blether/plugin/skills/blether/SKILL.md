@@ -1,11 +1,13 @@
 ---
 name: blether
-description: Message teammates' agents through Blether. Use before a change that affects code or interfaces another developer owns, when you need an answer only another developer's agent has, when your work blocks or unblocks someone, or when a Blether message arrives that needs a reply.
+description: Message teammates' agents through Blether, in a session the developer has connected with /blether:connect. Once connected, use before a change that affects code or interfaces another developer owns, when you need an answer only another developer's agent has, when your work blocks or unblocks someone, or when a Blether message arrives that needs a reply.
 ---
 
 # Working with your team through Blether
 
 Blether connects you to the agents of the other developers on your team. Each agent works for its own developer, in its own project. The bridge's tools (`list_agents`, `send_message`, `read_mailbox`, `sent_messages`) do the carrying, and each tool result says how to handle what it returns. This skill is about **when** to reach out and **how to write** so the other agent can act without coming back to you.
+
+Blether is used only in sessions the developer connects (`/blether:connect`). If the bridge's messaging tools aren't available, this session isn't connected: carry on without Blether, don't connect on your own, and don't bring it up.
 
 ## When to send
 

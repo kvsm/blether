@@ -8,7 +8,10 @@ import {
   type Audience,
   type SentMessage,
 } from "@blether/protocol";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  McpServer,
+  type RegisteredTool,
+} from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   SubscribeRequestSchema,
   UnsubscribeRequestSchema,
@@ -45,7 +48,7 @@ import {
  * The rules for handling messages travel in the tool results they apply to,
  * so agents get them on every host, at the moment they matter.
  */
-const INSTRUCTIONS =
+export const INSTRUCTIONS =
   "Blether lets you message the agents of other developers on your team. " +
   "list_agents shows your team's agents; send_message sends to one agent, a role or everyone; " +
   "read_mailbox reads messages sent to you; sent_messages shows whether yours were delivered and read. " +
@@ -141,6 +144,95 @@ export function createSetupProblemServer(
     );
   }
   return server;
+}
+
+/**
+ * The MCP server a bridge runs until its session connects, when the plugin
+ * asks for that (BLETHER_CONNECT=manual; see ADR 0008). It has no
+ * instructions and one tool, connect, so Blether stays out of sessions the
+ * developer doesn't use it in. Connecting installs the bridge's tools here,
+ * and offers disconnect, which takes them away again.
+ */
+export function createDormantServer(
+  connect: (server: McpServer) => Promise<{
+    /** What to tell the agent once connected. */
+    result: string;
+    /** Disconnects. Resolves to what to tell the agent. */
+    disconnect: () => Promise<string>;
+  }>,
+): McpServer {
+  const server = new McpServer(
+    { name: "blether", version: BLETHER_VERSION },
+    { capabilities: { experimental: { [CLAUDE_CHANNEL]: {} } } },
+  );
+  const offerConnect = () => {
+    const connectTool = server.registerTool(
+      "connect",
+      {
+        title: "Connect to Blether",
+        description:
+          "Connects this session to Blether, so you can message the agents of other developers on your team. " +
+          "Call it only when your developer runs /blether:connect or asks you to connect to Blether.",
+      },
+      async () => {
+        let connected;
+        try {
+          connected = await connect(server);
+        } catch (error) {
+          return {
+            ...text(`Couldn't connect to Blether: ${(error as Error).message}`),
+            isError: true,
+          };
+        }
+        connectTool.remove();
+        const disconnectTool = server.registerTool(
+          "disconnect",
+          {
+            title: "Disconnect from Blether",
+            description:
+              "Disconnects this session from Blether. Call it only when your developer runs /blether:disconnect or asks you to.",
+          },
+          async () => {
+            const result = await connected.disconnect();
+            disconnectTool.remove();
+            offerConnect();
+            return text(result);
+          },
+        );
+        return text(connected.result);
+      },
+    );
+  };
+  offerConnect();
+  return server;
+}
+
+/**
+ * Runs `install`, which registers tools on `server`, and returns a function
+ * that removes every one of them again.
+ */
+export function removableTools(
+  server: McpServer,
+  install: () => void,
+): () => void {
+  const added: RegisteredTool[] = [];
+  const register = server.registerTool.bind(server) as (
+    ...args: unknown[]
+  ) => RegisteredTool;
+  server.registerTool = ((...args: unknown[]) => {
+    const tool = register(...args);
+    added.push(tool);
+    return tool;
+  }) as typeof server.registerTool;
+  try {
+    install();
+  } finally {
+    // Back to the prototype's method.
+    delete (server as { registerTool?: unknown }).registerTool;
+  }
+  return () => {
+    for (const tool of added.splice(0)) tool.remove();
+  };
 }
 
 export interface BridgeOptions {

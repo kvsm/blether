@@ -12,9 +12,8 @@ import { z } from "zod";
 /**
  * What a bridge tells the rest of the device about its agent's mailbox, for
  * hosts without channels: how many messages are waiting and who from, never
- * their content. `blether watch` (a Claude Code plugin monitor) and the
- * plugin's hooks read it; only the bridge holds the agent's relay session, so
- * they can't ask the relay themselves.
+ * their content. `blether watch` reads it; only the bridge holds the agent's
+ * relay session, so the watch can't ask the relay itself.
  */
 export const InboxState = z.object({
   /** Changes each time a bridge starts, so a watcher can tell a restart from new mail. */
@@ -27,6 +26,8 @@ export const InboxState = z.object({
   /** The latest arrival's sender, if any has arrived this session. */
   lastFrom: z.string().optional(),
   updatedAt: z.string(),
+  /** Set when the bridge disconnected this session from the relay. */
+  closed: z.boolean().optional(),
 });
 export type InboxState = z.infer<typeof InboxState>;
 
@@ -40,12 +41,14 @@ export function inboxPath(home: string, team: string, agent: string): string {
 
 /** Written by the bridge whenever its agent's unread mail changes. */
 export class InboxFile {
-  private readonly session = randomUUID();
+  /** Identifies this connection, so a watch can tell when it has ended. */
+  readonly session = randomUUID();
   private arrivals = 0;
   private lastFrom: string | undefined;
+  private closed = false;
 
   constructor(
-    private readonly path: string,
+    readonly path: string,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -56,8 +59,16 @@ export class InboxFile {
     this.write(unread, senders);
   }
 
+  /** Records that this session has disconnected, so its watch stops. */
+  close() {
+    this.write(0, [], true);
+    this.closed = true;
+  }
+
   /** Records the mailbox as it now stands, after a read or at start-up. */
-  write(unread: number, senders: string[]) {
+  write(unread: number, senders: string[], closed = false) {
+    // A late write mustn't reopen a closed session.
+    if (this.closed) return;
     const state: InboxState = {
       session: this.session,
       arrivals: this.arrivals,
@@ -65,6 +76,7 @@ export class InboxFile {
       from: senders,
       ...(this.lastFrom ? { lastFrom: this.lastFrom } : {}),
       updatedAt: this.now().toISOString(),
+      ...(closed ? { closed } : {}),
     };
     mkdirSync(join(this.path, ".."), { recursive: true });
     // Write then rename, so a reader never sees half a file.

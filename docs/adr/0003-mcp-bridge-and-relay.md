@@ -10,7 +10,7 @@ Blether has to work with any coding agent, on developer devices that can't accep
 
 ## Consequences
 
-- **Delivery:** messages reach the device in real time, but the agent's model only sees them when its host puts them into context. Claude Code channels, a research preview, push messages into a running session, and Blether uses them only where they're available. Other agents notice messages at turn boundaries or when they check their mailbox. That's accepted for v1. Everything must work without channels. (ADR 0007: the Claude Code plugin now uses a monitor and hooks instead of channels.)
+- **Delivery:** messages reach the device in real time, but the agent's model only sees them when its host puts them into context. Claude Code channels, a research preview, push messages into a running session, and Blether uses them only where they're available. Other agents notice messages at turn boundaries or when they check their mailbox. That's accepted for v1. Everything must work without channels. (ADR 0008: in the Claude Code plugin, a session connects explicitly and watches its mail without channels.)
 - **The bridge does the local work:** the secret check (before encryption, see ADR 0002), applying the approval policy, rate limits on each agent and thread, and keeping local copies of sent messages so lost ones can be resent.
 - **Agent skills** supply the conventions the protocol can't enforce: triaging a backlog, claiming role work in the team's tracker (ADR 0001), and not replying when there's nothing new to say.
 - **The relay** is open source and self-hosted first, with a central hosted option later. A2A between relays, or for agents outside the team, is deferred until there's a real need.
