@@ -15,7 +15,13 @@ import { SentLog } from "./sent-log.js";
 import { InboxFile, inboxPath } from "./inbox-file.js";
 import { SessionFileError, findSessionFile } from "./session-file.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
-import { createBridgeServer, createSetupProblemServer } from "./server.js";
+import {
+  INSTRUCTIONS,
+  createBridgeServer,
+  createDormantServer,
+  createSetupProblemServer,
+  removableTools,
+} from "./server.js";
 
 /** Something that stops the bridge working, explained for the developer. */
 class SetupProblem extends Error {
@@ -55,11 +61,15 @@ const REFUSAL_FIXES: Partial<
  * still returns an MCP server: one whose only job is to explain the problem,
  * so the agent can tell the developer instead of the host just showing
  * "failed".
+ *
+ * With BLETHER_CONNECT=manual (the Claude Code plugin sets it), the bridge
+ * doesn't connect until the agent calls its connect tool: see startDormant.
  */
 export async function startBridge(
   env: NodeJS.ProcessEnv = process.env,
   log: (line: string) => void = (line) => console.error(line),
 ): Promise<StartedBridge> {
+  if (env.BLETHER_CONNECT === "manual") return startDormant(env, log);
   try {
     const { server, connection } = await connect(env, log);
     return {
@@ -99,6 +109,84 @@ export async function startBridge(
   }
 }
 
+/**
+ * A bridge that stays out of the session until the developer connects it
+ * (`/blether:connect`, ADR 0008): its only tool is connect. Connecting takes
+ * the agent over from any other session (the developer asked for this one),
+ * and gives the agent the command for a watch tied to this connection, so
+ * only connected sessions hear about mail.
+ */
+function startDormant(
+  env: NodeJS.ProcessEnv,
+  log: (line: string) => void,
+): StartedBridge {
+  let connected: Opened | undefined;
+  const disconnect = async () => {
+    const opened = connected;
+    connected = undefined;
+    if (!opened) return;
+    opened.removeTools();
+    try {
+      opened.inbox.close();
+    } catch {
+      // The watch then stops when the session ends.
+    }
+    await opened.connection.close();
+  };
+  const server = createDormantServer(async (server) => {
+    let opened;
+    try {
+      opened = await connect(env, log, server);
+    } catch (error) {
+      if (error instanceof SetupProblem) {
+        throw new Error(error.message, { cause: error });
+      }
+      throw error;
+    }
+    connected = opened;
+    log(`blether bridge connected as ${opened.agent}`);
+    return {
+      result: connectedGuidance(opened),
+      disconnect: async () => {
+        await disconnect();
+        log("blether bridge disconnected");
+        return "Disconnected from Blether. Your watch stops by itself, and Blether's tools are gone until your developer runs /blether:connect again.";
+      },
+    };
+  });
+  return {
+    server,
+    close: async () => {
+      await server.close();
+      await disconnect();
+    },
+  };
+}
+
+/** What the agent is told when it connects: how to use Blether, and what to do now. */
+function connectedGuidance({
+  agent,
+  team,
+  inbox,
+  pendingEscalations,
+}: Opened): string {
+  const path = inbox.path.split("\\").join("/");
+  const watch = `blether watch --inbox "${path}" --session ${inbox.session}`;
+  return [
+    `Connected to Blether: you are ${agent} in team ${team.name}.`,
+    INSTRUCTIONS,
+    ...(pendingEscalations > 0
+      ? [
+          `${pendingEscalations} escalation(s) from earlier sessions are waiting for your developer: call list_escalations and raise them with your developer.`,
+        ]
+      : []),
+    "",
+    "Now:",
+    "1. Call read_mailbox.",
+    `2. Start a watch, so you hear about new mail between prompts: use the Monitor tool (load it with ToolSearch first if it's deferred) with the command: ${watch} — the description "Blether mail for ${agent}", and timeout_ms 1800000. Each line it prints means new mail: call read_mailbox. When the watch expires, start it again. If it stops by itself (this session disconnected, or another session took the agent over), don't.`,
+  ].join("\n");
+}
+
 export interface StartedBridge {
   server: McpServer;
   /** Why the bridge couldn't start, if it couldn't. */
@@ -106,7 +194,16 @@ export interface StartedBridge {
   close(): Promise<void>;
 }
 
-async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
+/**
+ * Finds the session's agent and connects it to the relay. With `into`, the
+ * bridge's tools are installed on that server and any other session acting
+ * as the agent is taken over; otherwise a new bridge server is created.
+ */
+async function connect(
+  env: NodeJS.ProcessEnv,
+  log: (line: string) => void,
+  into?: McpServer,
+): Promise<Opened> {
   const home = env.BLETHER_HOME ?? defaultBletherHome();
   let session;
   try {
@@ -165,7 +262,7 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
 
   const found = { store, credentials, team, agent: agent.data, log };
   try {
-    return await open(found, false);
+    return await open(found, into !== undefined, into);
   } catch (error) {
     if (!(error instanceof RelayError)) {
       throw new SetupProblem(
@@ -175,7 +272,7 @@ async function connect(env: NodeJS.ProcessEnv, log: (line: string) => void) {
     const fix = REFUSAL_FIXES[error.code]?.(agent.data, team.name);
     throw new SetupProblem(
       `The relay refused this session (${error.code}): ${error.message}${fix ? ` ${fix}` : ""}`,
-      error.code === "agent-in-use"
+      error.code === "agent-in-use" && !into
         ? async (server) => (await open(found, true, server)).connection
         : undefined,
     );
@@ -203,7 +300,7 @@ async function open(
   },
   takeover: boolean,
   server?: McpServer,
-) {
+): Promise<Opened> {
   const relay = await RelayConnection.connect(team.relayUrl, credentials, {
     scope: { team: team.id, agent },
     witness: new SeenLogs(store.home),
@@ -215,14 +312,47 @@ async function open(
   if (relay.identity && relay.identity.length > credentials.identity.length) {
     store.saveIdentity(relay.identity);
   }
-  keepInboxFile(relay, new InboxFile(inboxPath(store.home, team.id, agent)));
-  const bridge = createBridgeServer(relay, {
+  const inbox = new InboxFile(inboxPath(store.home, team.id, agent));
+  keepInboxFile(relay, inbox);
+  const escalations = new EscalationStore(store.home, team.id, agent);
+  const options = {
     policy: new PolicyStore(store.home).load(),
-    escalations: new EscalationStore(store.home, team.id, agent),
+    escalations,
     sentLog: new SentLog(store.home, team.id, agent),
-    ...(server ? { server } : {}),
-  });
-  return { server: bridge, connection: relay };
+  };
+  let bridge: McpServer;
+  let removeTools = () => {};
+  if (server) {
+    bridge = server;
+    removeTools = removableTools(server, () =>
+      createBridgeServer(relay, { ...options, server }),
+    );
+  } else {
+    bridge = createBridgeServer(relay, options);
+  }
+  return {
+    server: bridge,
+    connection: relay,
+    agent,
+    team,
+    inbox,
+    removeTools,
+    pendingEscalations: escalations.pending().length,
+  };
+}
+
+/** A session connected to the relay as its agent. */
+interface Opened {
+  server: McpServer;
+  connection: RelayConnection;
+  agent: string;
+  team: TeamRecord;
+  /** The agent's inbox state file, which this connection keeps up to date. */
+  inbox: InboxFile;
+  /** Removes the bridge's tools, when they were installed on an existing server. */
+  removeTools: () => void;
+  /** Escalations from earlier sessions still waiting for the developer. */
+  pendingEscalations: number;
 }
 
 /**
