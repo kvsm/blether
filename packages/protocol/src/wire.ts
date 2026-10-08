@@ -128,6 +128,17 @@ export const ClientFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     team: z.string(),
   }),
+  /**
+   * Replaces the connection's sign-in credential before it expires, for
+   * the same person. `signature` signs the connection's challenge as the
+   * hello did, but covering the new credential (auth.ts).
+   */
+  z.object({
+    type: z.literal("reauth"),
+    requestId: z.uuid(),
+    credential: z.string().min(1),
+    signature: Signature,
+  }),
   /** The agent has seen these lost-message notices; the relay can forget them. */
   z.object({ type: z.literal("ack-lost"), ids: z.array(z.uuid()).min(1) }),
 ]);
@@ -161,6 +172,9 @@ export const ErrorCode = z.enum([
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 
+/** The WebSocket close code for a connection whose sign-in expired without a `reauth`. */
+export const SIGN_IN_EXPIRED = 4003;
+
 /** Frames the relay sends to a bridge. */
 export const RelayFrame = z.discriminatedUnion("type", [
   /** First frame on a connection: sign this to authenticate. */
@@ -192,6 +206,21 @@ export const RelayFrame = z.discriminatedUnion("type", [
    * waiting for it (messages and lost notices) has been sent.
    */
   z.object({ type: z.literal("caught-up") }),
+  /**
+   * The connection's sign-in expires at `expiresAt`: send `reauth` with a
+   * fresh credential before then, or the relay closes the connection
+   * (close code SIGN_IN_EXPIRED).
+   */
+  z.object({
+    type: z.literal("sign-in-expiring"),
+    expiresAt: z.iso.datetime(),
+  }),
+  /** Reply to `reauth`: the new credential is in use, until `expiresAt` if it expires. */
+  z.object({
+    type: z.literal("reauthed"),
+    requestId: z.uuid(),
+    expiresAt: z.iso.datetime().optional(),
+  }),
   /** Reply to `list-sent`, newest first. */
   z.object({
     type: z.literal("sent-list"),
