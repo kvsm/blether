@@ -13,6 +13,7 @@ import {
   signChallenge,
   DISCOVERY_PATH,
   RelayDiscovery,
+  SIGN_IN_EXPIRED,
   verifyIdentityLog,
   verifyTeamLog,
   type AgentName,
@@ -89,7 +90,16 @@ export interface ConnectOptions {
   heartbeatMs?: number;
   /** The credential to sign in with, for a relay that requires one (`blether sign-in`). */
   credential?: string | undefined;
+  /**
+   * Gets a fresh credential, when the relay warns that the current one is
+   * about to expire, and before reconnecting. Without it, a session whose
+   * sign-in expires is closed.
+   */
+  renewCredential?: (() => Promise<string>) | undefined;
 }
+
+/** How long to wait before trying again to renew a sign-in that couldn't be. */
+const RENEW_RETRY_MS = 30_000;
 
 /**
  * Asks the relay at `url` (ws:// or wss://) how it admits connections. A
@@ -314,6 +324,7 @@ export class RelayConnection {
   private readonly listings = new Map<string, Pending<SentMessage[]>>();
   private readonly teamRequests = new Map<string, Pending<TeamReply>>();
   private readonly presenceRequests = new Map<string, Pending<string[]>>();
+  private readonly reauths = new Map<string, Pending<void>>();
   private challenge: Pending<string> | undefined;
   /** The challenge the current connection answered, for proofs tied to it. */
   private answeredChallenge = "";
@@ -338,7 +349,8 @@ export class RelayConnection {
     private socket: WebSocket,
     private readonly url: string,
     private readonly credentials: Credentials,
-    private readonly credential: string | undefined,
+    private credential: string | undefined,
+    private readonly renewCredential: (() => Promise<string>) | undefined,
     readonly scope: AgentScope | undefined,
     private readonly witness: LogWitness | undefined,
     private readonly readMessages: ReadMessageLog | undefined,
@@ -382,13 +394,16 @@ export class RelayConnection {
   /** The socket closed: fail what was waiting on it, then reconnect or end. */
   private dropped(code: number, reason: string) {
     const takenOver = code === 4002;
-    const refused = code === 4000 || code === 4001;
+    const expired = code === SIGN_IN_EXPIRED;
+    const refused = code === 4000 || code === 4001 || expired;
     if (this.state !== "reconnecting") {
       this.closedBecause = takenOver
         ? "Another session took over this agent, so this one has been disconnected."
-        : refused
-          ? `The relay disconnected this session: ${reason}`
-          : "Lost connection to relay.";
+        : expired
+          ? `Your sign-in to the relay at ${this.url} expired. Run \`blether sign-in ${this.url}\` in a terminal, then connect again.`
+          : refused
+            ? `The relay disconnected this session: ${reason}`
+            : "Lost connection to relay.";
     }
     const error = new RelayError("disconnected", this.closedBecause!);
     this.challenge?.reject(error);
@@ -398,12 +413,14 @@ export class RelayConnection {
       ...this.listings.values(),
       ...this.teamRequests.values(),
       ...this.presenceRequests.values(),
+      ...this.reauths.values(),
     ])
       pending.reject(error);
     this.sends.clear();
     this.listings.clear();
     this.teamRequests.clear();
     this.presenceRequests.clear();
+    this.reauths.clear();
 
     // A failed attempt to reconnect: reconnect() decides what's next.
     if (this.state === "reconnecting") return;
@@ -433,6 +450,15 @@ export class RelayConnection {
     for (const delay of this.reconnectDelaysMs) {
       await new Promise((resolve) => setTimeout(resolve, delay).unref());
       if (this.closing) break;
+      // The sign-in may have expired while the connection was down.
+      if (this.renewCredential) {
+        try {
+          this.credential = await this.renewCredential();
+        } catch {
+          // Try with the one there is; the relay says if it's no good.
+        }
+        if (this.closing) break;
+      }
       const socket = openSocket(this.url, this.credential);
       this.socket = socket;
       this.attach(socket);
@@ -510,6 +536,7 @@ export class RelayConnection {
       reconnectDelaysMs = RECONNECT_DELAYS_MS,
       heartbeatMs = HEARTBEAT_MS,
       credential,
+      renewCredential,
     }: ConnectOptions = {},
   ): Promise<RelayConnection> {
     if (credential) checkCredentialTransport(url);
@@ -519,6 +546,7 @@ export class RelayConnection {
       url,
       credentials,
       credential,
+      renewCredential,
       scope,
       witness,
       readMessages,
@@ -1170,6 +1198,50 @@ export class RelayConnection {
     this.socket.send(JSON.stringify(frame));
   }
 
+  /**
+   * The relay warned the sign-in expires at `expiresAt`: get a fresh
+   * credential and hand it over (reauth), trying again until then if that
+   * fails. Without a way to renew, the relay closes the connection at expiry.
+   */
+  private async renewSignIn(expiresAt: Date): Promise<void> {
+    if (!this.renewCredential) {
+      this.log?.(
+        `Your sign-in to the relay at ${this.url} expires at ${expiresAt.toISOString()}, and this session can't renew it.`,
+      );
+      return;
+    }
+    const socket = this.socket;
+    while (this.socket === socket && this.isOpen()) {
+      try {
+        const fresh = await this.renewCredential();
+        const requestId = randomUUID();
+        await this.request(this.reauths, requestId, {
+          type: "reauth",
+          requestId,
+          credential: fresh,
+          signature: signChallenge(
+            this.credentials.device,
+            this.answeredChallenge,
+            this.scope ?? {},
+            fresh,
+          ),
+        });
+        this.credential = fresh;
+        return;
+      } catch (error) {
+        const retryAt = Date.now() + RENEW_RETRY_MS;
+        this.log?.(
+          `Couldn't renew your sign-in to the relay at ${this.url}: ${(error as Error).message}` +
+            (retryAt < expiresAt.getTime() ? " Trying again shortly." : ""),
+        );
+        if (retryAt >= expiresAt.getTime()) return;
+        await new Promise((resolve) =>
+          setTimeout(resolve, RENEW_RETRY_MS).unref(),
+        );
+      }
+    }
+  }
+
   private receive(data: string) {
     const frame = parseFrame(RelayFrame, data);
     if (!frame) return;
@@ -1222,6 +1294,12 @@ export class RelayConnection {
       case "presence":
         take(this.presenceRequests, frame.requestId)?.resolve(frame.online);
         return;
+      case "sign-in-expiring":
+        void this.renewSignIn(new Date(frame.expiresAt));
+        return;
+      case "reauthed":
+        take(this.reauths, frame.requestId)?.resolve();
+        return;
       case "error": {
         const error = new RelayError(frame.code, frame.message);
         if (frame.id) {
@@ -1229,7 +1307,8 @@ export class RelayConnection {
             take(this.sends, frame.id) ??
             take(this.listings, frame.id) ??
             take(this.teamRequests, frame.id) ??
-            take(this.presenceRequests, frame.id)
+            take(this.presenceRequests, frame.id) ??
+            take(this.reauths, frame.id)
           )?.reject(error);
         } else if (this.welcome) {
           this.welcome.reject(error);

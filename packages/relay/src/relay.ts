@@ -18,8 +18,10 @@ import {
   verifyIdentityLog,
   verifyInviteProof,
   verifyTeamLog,
+  SIGN_IN_EXPIRED,
   type AgentName,
   type ErrorCode,
+  type SessionScope,
   type Identity,
   type Message,
   type RelayDiscovery,
@@ -51,7 +53,14 @@ export interface RelayOptions {
    * Who may connect, and what their sign-in lets them do. Defaults to an
    * open relay, where anyone may connect and create teams.
    */
-  access?: { provider: AccessProvider; rules?: Rules };
+  access?: {
+    provider: AccessProvider;
+    rules?: Rules;
+    /** How long before a sign-in expires to warn the client. Defaults to SIGN_IN_WARNING_MS. */
+    warnBeforeExpiryMs?: number;
+    /** How long after it expires to close the connection. Defaults to SIGN_IN_GRACE_MS. */
+    graceAfterExpiryMs?: number;
+  };
   /**
    * How often to check each connection is still alive. A connection that
    * misses two checks in a row is dropped, which frees its agent for another
@@ -94,6 +103,13 @@ interface AgentScope {
 }
 
 const sessionKey = ({ team, agent }: AgentScope) => `${team}\n${agent}`;
+
+/** Clients renew a sign-in when warned, this long before it expires. */
+export const SIGN_IN_WARNING_MS = 5 * 60_000;
+/** A connection outlives its sign-in by this much, for clocks that disagree. */
+export const SIGN_IN_GRACE_MS = 60_000;
+/** The longest setTimeout can wait. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** A connection the sign-in provider let in, and the credential it sent. */
 interface Admission {
@@ -179,6 +195,9 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   const now = options.now ?? (() => new Date());
   const access = options.access?.provider ?? openAccess();
   const rules = options.access?.rules ?? ALLOW_SIGNED_IN;
+  const signInWarningMs =
+    options.access?.warnBeforeExpiryMs ?? SIGN_IN_WARNING_MS;
+  const signInGraceMs = options.access?.graceAfterExpiryMs ?? SIGN_IN_GRACE_MS;
   const http: Server = options.tls
     ? createHttpsServer({ cert: options.tls.cert, key: options.tls.key })
     : createHttpServer();
@@ -327,10 +346,13 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   });
 
   wss.on("connection", (socket) => {
-    const { principal, credential } = admissions.get(socket)!;
+    const admission = admissions.get(socket)!;
+    let { principal } = admission;
     const challenge = randomToken();
     let developer: Identity | undefined;
     let scope: AgentScope | undefined;
+    /** The device and scope the hello was signed for, which a reauth signs for too. */
+    let signedAs: { device: string; scope: SessionScope } | undefined;
 
     const send = (frame: RelayFrame) => socket.send(JSON.stringify(frame));
     const fail = (code: ErrorCode, message: string, id?: string) =>
@@ -338,6 +360,89 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     const refuse = (code: ErrorCode, message: string) => {
       fail(code, message);
       socket.close();
+    };
+
+    // A sign-in that expires is good for the connection until then: the
+    // client is warned first, and the connection closed unless it sends a
+    // fresh credential (reauth).
+    let expiryTimers: NodeJS.Timeout[] = [];
+    const watchExpiry = () => {
+      for (const timer of expiryTimers) clearTimeout(timer);
+      expiryTimers = [];
+      if (!principal.expiresAt) return;
+      const expiresAt = principal.expiresAt.toISOString();
+      const left = principal.expiresAt.getTime() - Date.now();
+      const after = (ms: number, act: () => void) => {
+        // setTimeout can't wait longer; such a sign-in outlives any connection.
+        if (ms <= MAX_TIMER_MS) expiryTimers.push(setTimeout(act, ms));
+      };
+      after(Math.max(0, left - signInWarningMs), () =>
+        send({ type: "sign-in-expiring", expiresAt }),
+      );
+      after(Math.max(0, left + signInGraceMs), () =>
+        socket.close(SIGN_IN_EXPIRED, "Your sign-in expired."),
+      );
+    };
+    watchExpiry();
+    socket.on("close", () => {
+      for (const timer of expiryTimers) clearTimeout(timer);
+    });
+
+    /** Takes a fresh credential for the same person, as the hello's device signed it. */
+    const reauth = async (frame: Extract<ClientFrame, { type: "reauth" }>) => {
+      const refused = (message: string) =>
+        fail("sign-in-refused", message, frame.requestId);
+      let next: Principal | undefined;
+      try {
+        next = await access.authenticate(frame.credential);
+      } catch {
+        refused("The relay couldn't check the new sign-in. Try again shortly.");
+        return;
+      }
+      if (!next) {
+        refused("The relay didn't accept the new sign-in.");
+        return;
+      }
+      if (
+        next.provider !== principal.provider ||
+        next.issuer !== principal.issuer ||
+        next.subject !== principal.subject
+      ) {
+        refused("A connection can't change who it's signed in as.");
+        return;
+      }
+      if (!allows(rules, next, "connect")) {
+        fail(
+          "not-allowed",
+          "Your sign-in no longer allows you to use this relay.",
+          frame.requestId,
+        );
+        return;
+      }
+      if (
+        !signedAs ||
+        !verifyChallenge(
+          signedAs.device,
+          challenge,
+          signedAs.scope,
+          frame.signature,
+          frame.credential,
+        )
+      ) {
+        fail(
+          "authentication-failed",
+          "The new sign-in wasn't signed by this connection's device.",
+          frame.requestId,
+        );
+        return;
+      }
+      principal = next;
+      watchExpiry();
+      send({
+        type: "reauthed",
+        requestId: frame.requestId,
+        ...(next.expiresAt ? { expiresAt: next.expiresAt.toISOString() } : {}),
+      });
     };
 
     send({ type: "challenge", challenge });
@@ -398,7 +503,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             challenge,
             { team: frame.team, agent: frame.agent },
             frame.signature,
-            credential,
+            admission.credential,
           )
         ) {
           refuse(
@@ -457,6 +562,10 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
         }
 
         developer = identity;
+        signedAs = {
+          device: frame.device,
+          scope: { team: frame.team, agent: frame.agent },
+        };
         send({
           type: "welcome",
           developer: identity.id,
@@ -484,6 +593,11 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
               ? frame.requestId
               : undefined,
         );
+        return;
+      }
+
+      if (frame.type === "reauth") {
+        void reauth(frame);
         return;
       }
 
