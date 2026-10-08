@@ -1,6 +1,6 @@
 {
   "name": "@kvsm/blether",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Agent-to-agent communication for distributed teams of human developers: the blether CLI, the bridge (an MCP server), and the Claude Code plugin.",
   "keywords": [
     "agents",

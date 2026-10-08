@@ -1,6 +1,6 @@
 {
   "name": "@blether/protocol",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "description": "Message and envelope types shared by the Blether bridge and relay.",
