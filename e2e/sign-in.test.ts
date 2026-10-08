@@ -8,7 +8,6 @@ import {
   type StartedBridge,
 } from "@blether/bridge";
 import {
-  oidcAccess,
   startRelay,
   tokenAccess,
   tokenHash,
@@ -139,25 +138,6 @@ describe("signing in to a relay", () => {
 
     expect(result.code).toBe(1);
     expect(result.err).toContain("isn't encrypted");
-    expect(kev.asked).toEqual([]);
-  });
-
-  it("says it can't sign in to an OpenID Connect relay yet, without asking for a token", async () => {
-    relay = await startRelay({
-      access: {
-        provider: oidcAccess({
-          issuer: "https://id.example.invalid",
-          audience: "relay",
-          clientId: "blether-cli",
-          scopes: ["openid"],
-        }),
-      },
-    });
-
-    const result = await kev.run("sign-in", relay.url);
-
-    expect(result.code).toBe(1);
-    expect(result.err).toContain("uses oidc sign-in");
     expect(kev.asked).toEqual([]);
   });
 

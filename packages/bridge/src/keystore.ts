@@ -134,11 +134,30 @@ export class FileKeyStore {
   }
 }
 
-const SignIn = z.object({
-  kind: z.literal("token"),
-  credential: z.string().min(1),
-  signedInAt: z.string(),
-});
+const SignIn = z.discriminatedUnion("kind", [
+  /** A token the relay's operator gave the developer. */
+  z.object({
+    kind: z.literal("token"),
+    credential: z.string().min(1),
+    signedInAt: z.string(),
+  }),
+  /**
+   * An OpenID Connect sign-in: `credential` is the access token, renewed
+   * with `refreshToken` from the identity provider the relay named.
+   */
+  z.object({
+    kind: z.literal("oidc"),
+    credential: z.string().min(1),
+    expiresAt: z.iso.datetime().optional(),
+    refreshToken: z.string().min(1).optional(),
+    access: z.object({
+      issuer: z.string(),
+      clientId: z.string(),
+      scopes: z.array(z.string()),
+    }),
+    signedInAt: z.string(),
+  }),
+]);
 export type SignIn = z.infer<typeof SignIn>;
 
 /** Relays are keyed by URL without a trailing slash, however they were written. */
@@ -161,9 +180,17 @@ export class SignIns {
       : {};
   }
 
-  /** The credential for the relay at `url`, if this device has signed in to it. */
+  /** This device's sign-in to the relay at `url`, if it has one. */
+  get(url: string): SignIn | undefined {
+    return this.read()[relayKey(url)];
+  }
+
+  /**
+   * The credential for the relay at `url`, as saved, if this device has
+   * signed in to it. signInCredential (sign-in.ts) renews one that's expiring.
+   */
   credential(url: string): string | undefined {
-    return this.read()[relayKey(url)]?.credential;
+    return this.get(url)?.credential;
   }
 
   save(url: string, signIn: SignIn): void {

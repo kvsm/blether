@@ -23,6 +23,7 @@
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@secretlint/core": "^13.0.6",
     "@secretlint/secretlint-rule-preset-recommend": "^13.0.6",
+    "openid-client": "^6.8.8",
     "ws": "^8.22.0",
     "zod": "^4.6.5"
   }

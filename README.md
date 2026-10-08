@@ -118,7 +118,7 @@ To use Blether on another of your devices, [add the device](#your-devices) to yo
 
 ### 4. Create or join a team
 
-If the relay requires a sign-in, first run `blether sign-in <relay-url>`, or `blether sign-in <invite>` before joining, and paste the token its operator gave you.
+If the relay requires a sign-in, first run `blether sign-in <relay-url>`, or `blether sign-in <invite>` before joining. Depending on the relay, it asks for the token its operator gave you, or opens your browser to sign in with your organisation's account (`--device-code` signs in with a code instead, in a browser anywhere).
 
 One developer creates the team, becoming its **Team Admin**, and invites the others:
 

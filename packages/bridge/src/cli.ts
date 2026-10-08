@@ -62,6 +62,15 @@ import {
   discoverRelay,
 } from "./relay-connection.js";
 import { SessionFileError, writeSessionFile } from "./session-file.js";
+import {
+  oidcSignIn,
+  openBrowser,
+  signInCredential,
+  signInFailure,
+  signInWithBrowser,
+  signInWithDeviceCode,
+  type OidcAccess,
+} from "./sign-in.js";
 import { watchInbox } from "./watch.js";
 import {
   addDenyRules,
@@ -86,8 +95,10 @@ const USAGE = `Usage: blether <command>
 Commands:
   init --name <name>                 Create this device's key and your Blether identity
   whoami                             Show your identity, and the relays you're signed in to
-  sign-in <team | relay-url | invite>
-                                     Sign in to a relay that requires it, with what its operator gave you
+  sign-in <team | relay-url | invite> [--device-code]
+                                     Sign in to a relay that requires it: with a token its operator
+                                     gave you, or in your browser (--device-code: in a browser
+                                     anywhere, with a code)
   sign-out <team | relay-url>        Forget your sign-in to a relay
   team create <name> --relay <url>   Start a team on a relay; you become its Team Admin
   team list                          List the teams you belong to
@@ -139,6 +150,11 @@ export interface CliIo {
   confirm?: (question: string) => Promise<boolean>;
   /** Asks for a secret without echoing it. Defaults to an interactive terminal, and nothing otherwise. */
   secret?: (question: string) => Promise<string | undefined>;
+  /**
+   * Opens a URL in the developer's browser, to sign in. Defaults to the
+   * system's browser, and only at an interactive terminal.
+   */
+  browser?: (url: string) => Promise<void>;
 }
 
 export interface CliContext {
@@ -352,7 +368,12 @@ function relayFor(target: string | undefined, ctx: CliContext): string {
 }
 
 async function signIn(args: string[], ctx: CliContext): Promise<number> {
-  const url = relayFor(args[0], ctx);
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: { "device-code": { type: "boolean" } },
+  });
+  const url = relayFor(positionals[0], ctx);
   const credentials = loadCredentials(ctx.store);
   // Before anything else: there's no safe way to sign in over plain ws://.
   checkCredentialTransport(url);
@@ -368,10 +389,10 @@ async function signIn(args: string[], ctx: CliContext): Promise<number> {
     ctx.io.out(`The relay at ${url} doesn't need a sign-in.`);
     return 0;
   }
-  if (discovery.access.kind !== "token") {
-    throw new CliError(
-      `The relay at ${url} uses ${discovery.access.kind} sign-in, which this version of Blether can't do yet. Update Blether.`,
-    );
+  if (discovery.access.kind === "oidc") {
+    return signInWithOidc(ctx, url, credentials, discovery.access, {
+      deviceCode: values["device-code"] ?? false,
+    });
   }
   const credential = await askSecret(
     ctx,
@@ -385,6 +406,37 @@ async function signIn(args: string[], ctx: CliContext): Promise<number> {
     credential,
     signedInAt: now(ctx).toISOString(),
   });
+  ctx.io.out(`Signed in to the relay at ${url}.`);
+  return 0;
+}
+
+/** Signs in with the identity provider an `oidc` relay names. */
+async function signInWithOidc(
+  ctx: CliContext,
+  url: string,
+  credentials: Credentials,
+  access: OidcAccess,
+  { deviceCode }: { deviceCode: boolean },
+): Promise<number> {
+  // Only the developer signs in, never an agent in their name.
+  if (!ctx.io.browser && !process.stdin.isTTY) {
+    throw new CliError("Run this in an interactive terminal to sign in.");
+  }
+  const say = (line: string) => ctx.io.out(line);
+  let tokens;
+  try {
+    tokens = deviceCode
+      ? await signInWithDeviceCode(access, { say })
+      : await signInWithBrowser(access, {
+          say,
+          open: ctx.io.browser ?? openBrowser,
+        });
+  } catch (error) {
+    throw new CliError(`Not signed in: ${signInFailure(error)}`);
+  }
+  // Check the relay accepts it before keeping it.
+  await withRelay(ctx, url, credentials, async () => {}, tokens.accessToken);
+  new SignIns(ctx.store.home).save(url, oidcSignIn(access, tokens, now(ctx)));
   ctx.io.out(`Signed in to the relay at ${url}.`);
   return 0;
 }
@@ -1527,8 +1579,15 @@ async function withRelay<T>(
   url: string,
   credentials: Credentials,
   action: (relay: RelayConnection) => Promise<T>,
-  credential = new SignIns(ctx.store.home).credential(url),
+  credential?: string,
 ): Promise<T> {
+  try {
+    credential ??= await signInCredential(new SignIns(ctx.store.home), url);
+  } catch (error) {
+    throw new CliError(
+      `${(error as Error).message} Run \`blether sign-in ${url}\` to sign in again.`,
+    );
+  }
   let relay: RelayConnection;
   try {
     relay = await RelayConnection.connect(url, credentials, {

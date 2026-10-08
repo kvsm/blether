@@ -16,6 +16,7 @@ import { SentLog } from "./sent-log.js";
 import { InboxFile, inboxPath } from "./inbox-file.js";
 import { SessionFileError, findSessionFile } from "./session-file.js";
 import { RelayConnection, RelayError } from "./relay-connection.js";
+import { signInCredential } from "./sign-in.js";
 import {
   INSTRUCTIONS,
   createBridgeServer,
@@ -338,6 +339,14 @@ async function open(
   takeover: boolean,
   server?: McpServer,
 ): Promise<Opened> {
+  const signIns = new SignIns(store.home);
+  const credential = await signInCredential(signIns, team.relayUrl).catch(
+    (error: Error) => {
+      // The relay says whether the one there is will do.
+      log(error.message);
+      return signIns.credential(team.relayUrl);
+    },
+  );
   const relay = await RelayConnection.connect(team.relayUrl, credentials, {
     scope: { team: team.id, agent },
     witness: new SeenLogs(store.home),
@@ -345,7 +354,12 @@ async function open(
     takeover,
     log,
     ...timings,
-    credential: new SignIns(store.home).credential(team.relayUrl),
+    credential,
+    renewCredential: async () => {
+      const fresh = await signInCredential(signIns, team.relayUrl);
+      if (!fresh) throw new Error("This device isn't signed in to the relay.");
+      return fresh;
+    },
   });
   // Another of the developer's devices may have added a device since.
   if (relay.identity && relay.identity.length > credentials.identity.length) {

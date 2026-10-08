@@ -27,7 +27,7 @@ Run `team list`.
 - They have an invite: ask them to run `blether join <invite>` in their own terminal. It shows the team and relay, and asks them to confirm. Then run `team list`.
 - They're starting a team: ask for the team name and the relay URL, and run `team create <name> --relay <url>`. To bring teammates in, they run `blether invite <team>` in their own terminal and share the link privately.
 
-If the relay requires a sign-in, `join` or `team create` says so. Ask them to run `blether sign-in <invite>` (before joining) or `blether sign-in <relay-url>` in their own terminal, and paste the token the relay's operator gave them. Then try again.
+If the relay requires a sign-in, `join` or `team create` says so. Ask them to run `blether sign-in <invite>` (before joining) or `blether sign-in <relay-url>` in their own terminal. Depending on the relay, it asks for the token the relay's operator gave them, or opens their browser to sign in with their organisation's account. Then try again.
 
 Done when `team list` shows the team.
 

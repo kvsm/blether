@@ -28,6 +28,7 @@
     "@types/node": "^24.19.0",
     "@types/ws": "^8.18.2",
     "eslint": "^10.11.0",
+    "jose": "^6.2.12",
     "prettier": "^3.9.9",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.71.0",

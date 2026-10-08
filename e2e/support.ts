@@ -28,6 +28,7 @@ export function device(root: string, name: string) {
   const teams = new TeamDirectory(store.home);
   let answer = true;
   let secret: string | undefined;
+  let browser: ((url: string) => Promise<void>) | undefined;
   const asked: string[] = [];
   let clock: Date | undefined;
 
@@ -48,6 +49,7 @@ export function device(root: string, name: string) {
           asked.push(question);
           return secret;
         },
+        ...(browser ? { browser } : {}),
       },
       ...(clock ? { now: () => clock! } : {}),
     });
@@ -77,6 +79,10 @@ export function device(root: string, name: string) {
     /** What the developer types when asked for a secret, such as a sign-in token. */
     typeSecret(value: string | undefined) {
       secret = value;
+    },
+    /** What happens when the CLI opens the developer's browser to sign in. */
+    useBrowser(open: (url: string) => Promise<void>) {
+      browser = open;
     },
     /** Pretends it's `date` for the CLI's sense of time. */
     setClock(date: Date) {
