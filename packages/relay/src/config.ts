@@ -1,4 +1,13 @@
 import { readFileSync } from "node:fs";
+import { z } from "zod";
+import {
+  TokenEntry,
+  openAccess,
+  parseRule,
+  tokenAccess,
+  type AccessProvider,
+  type Rules,
+} from "./access.js";
 import type { RelayOptions } from "./relay.js";
 
 /** A setting the operator got wrong, explained without a stack trace. */
@@ -18,6 +27,14 @@ export const RELAY_ENV = {
     "1 to ask bridges whether each message went to one agent, a role, or everyone, and count role messages and broadcasts",
   BLETHER_RELAY_HEARTBEAT_MS:
     "How often to check connections are alive (default 15000)",
+  BLETHER_RELAY_ACCESS:
+    "Who may connect: open (anyone, the default) or token (a token listed in BLETHER_RELAY_TOKENS_FILE)",
+  BLETHER_RELAY_TOKENS_FILE:
+    "For BLETHER_RELAY_ACCESS=token: a JSON list of the entries `blether-relay token` prints; read at start-up",
+  BLETHER_RELAY_ALLOW_CONNECT:
+    "Who may connect once signed in: signed-in (the default), or comma-separated claim=value pairs, any of which allows it",
+  BLETHER_RELAY_ALLOW_TEAM_CREATE:
+    "Who may create teams once signed in: signed-in (the default), or comma-separated claim=value pairs",
 } as const;
 
 /** The relay's settings from its environment. */
@@ -46,10 +63,54 @@ export function relayConfig(
     heartbeatMs,
     statsIntervalMs,
     debugAudience,
+    access: { provider: accessProvider(env), rules: accessRules(env) },
     ...(certFile && keyFile
       ? { tls: { cert: read(certFile), key: read(keyFile) } }
       : {}),
   };
+}
+
+function accessProvider(env: NodeJS.ProcessEnv): AccessProvider {
+  const kind = env.BLETHER_RELAY_ACCESS || "open";
+  if (kind === "open") return openAccess();
+  if (kind !== "token") {
+    throw new RelayConfigError(
+      `BLETHER_RELAY_ACCESS must be open or token, not "${kind}".`,
+    );
+  }
+  const file = env.BLETHER_RELAY_TOKENS_FILE;
+  if (!file) {
+    throw new RelayConfigError(
+      "BLETHER_RELAY_ACCESS=token needs BLETHER_RELAY_TOKENS_FILE, a list of the entries `blether-relay token` prints.",
+    );
+  }
+  const text = read(file);
+  try {
+    return tokenAccess(z.array(TokenEntry).parse(JSON.parse(text)));
+  } catch (error) {
+    throw new RelayConfigError(
+      `${file} isn't a JSON list of the entries \`blether-relay token\` prints: ${(error as Error).message}`,
+    );
+  }
+}
+
+function accessRules(env: NodeJS.ProcessEnv): Rules {
+  return {
+    connect: rule(env, "BLETHER_RELAY_ALLOW_CONNECT"),
+    "team.create": rule(env, "BLETHER_RELAY_ALLOW_TEAM_CREATE"),
+  };
+}
+
+function rule(env: NodeJS.ProcessEnv, name: string) {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return "signed-in";
+  const parsed = parseRule(raw);
+  if (!parsed) {
+    throw new RelayConfigError(
+      `${name} must be signed-in, or comma-separated claim=value pairs, not "${raw}".`,
+    );
+  }
+  return parsed;
 }
 
 function whole(env: NodeJS.ProcessEnv, name: string, fallback: number) {
