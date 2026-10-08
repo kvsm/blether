@@ -11,6 +11,16 @@ export const RelayAccess = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("open") }),
   /** A bearer token the relay's operator gave the developer. */
   z.object({ kind: z.literal("token") }),
+  /**
+   * An access token from an OpenID Connect provider. Clients sign in with
+   * `issuer`, as public client `clientId`, asking for `scopes`.
+   */
+  z.object({
+    kind: z.literal("oidc"),
+    issuer: z.url(),
+    clientId: z.string().min(1),
+    scopes: z.array(z.string().min(1)),
+  }),
 ]);
 export type RelayAccess = z.infer<typeof RelayAccess>;
 
