@@ -116,7 +116,7 @@ describe("teams through the blether CLI", () => {
     const second = await mallory.run("join", invite);
 
     expect(second.code).toBe(1);
-    expect(second.err).toContain("has been used");
+    expect(second.err).toContain("can't be used");
   });
 
   it("refuses an invite after it has expired", async () => {
@@ -152,7 +152,7 @@ describe("teams through the blether CLI", () => {
     const result = await mallory.run("join", forged);
 
     expect(result.code).toBe(1);
-    expect(result.err).toContain("isn't signed by the invite key");
+    expect(result.err).toContain("can't be used");
   });
 
   it("keeps non-members' agents off the team", async () => {

@@ -1309,7 +1309,18 @@ async function join(args: string[], ctx: CliContext): Promise<number> {
     link.relayUrl,
     credentials,
     async (relay) => {
-      const { team } = await relay.getTeam(link.teamId);
+      const { team } = await relay
+        .getTeam(link.teamId, { id: link.inviteId, secret: link.secret })
+        .catch((error: unknown) => {
+          // The relay answers a closed or wrong invite as if the team
+          // didn't exist, so it can't say which.
+          if (error instanceof RelayError && error.code === "unknown-team") {
+            throw new CliError(
+              "This invite can't be used: it has expired, been used or been revoked, or the link is wrong. Ask for a new one.",
+            );
+          }
+          throw error;
+        });
       if (team.members.includes(signer.identity.id)) {
         throw new CliError(`You're already a member of ${team.name}.`);
       }

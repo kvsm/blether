@@ -105,10 +105,15 @@ export const ClientFrame = z.discriminatedUnion("type", [
     requestId: z.uuid(),
     log: TeamLog,
   }),
+  /**
+   * Asks for a team's log. Only members get it, and someone holding an
+   * invite, who proves it with `invite` (team.ts, proveInvite).
+   */
   z.object({
     type: z.literal("get-team"),
     requestId: z.uuid(),
     team: z.string(),
+    invite: z.object({ id: z.string(), proof: Signature }).optional(),
   }),
   /** Appends an entry; it must extend the log's current head. */
   z.object({

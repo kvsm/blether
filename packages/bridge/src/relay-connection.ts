@@ -9,6 +9,7 @@ import {
   openMessage,
   parseFrame,
   sealMessage,
+  proveInvite,
   signChallenge,
   verifyIdentityLog,
   verifyTeamLog,
@@ -239,6 +240,8 @@ export class RelayConnection {
   private readonly teamRequests = new Map<string, Pending<TeamReply>>();
   private readonly presenceRequests = new Map<string, Pending<string[]>>();
   private challenge: Pending<string> | undefined;
+  /** The challenge the current connection answered, for proofs tied to it. */
+  private answeredChallenge = "";
   private welcome: Pending<Welcome> | undefined;
   /** Whether the relay asked to be told each send's audience (debug statistics). */
   private audienceHints = false;
@@ -508,6 +511,7 @@ export class RelayConnection {
       socket.once("error", reject);
     });
     const challenge = await challenged;
+    this.answeredChallenge = challenge;
     this.write({
       type: "hello",
       ...(scope ?? {}),
@@ -770,13 +774,30 @@ export class RelayConnection {
     }));
   }
 
-  /** Fetches team `id`'s log and verifies it. */
-  async getTeam(id: string): Promise<VerifiedTeam> {
+  /**
+   * Fetches team `id`'s log and verifies it. Someone who isn't a member yet
+   * passes the invite they hold, which proves to the relay they may read it.
+   */
+  async getTeam(
+    id: string,
+    invite?: { id: string; secret: string },
+  ): Promise<VerifiedTeam> {
     const requestId = randomUUID();
     const reply = await this.request(this.teamRequests, requestId, {
       type: "get-team",
       requestId,
       team: id,
+      ...(invite && {
+        invite: {
+          id: invite.id,
+          proof: proveInvite(
+            invite.secret,
+            this.answeredChallenge,
+            id,
+            invite.id,
+          ),
+        },
+      }),
     });
     return this.verifyReply(reply, id);
   }
