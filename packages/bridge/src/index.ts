@@ -29,6 +29,12 @@ export {
 } from "./server.js";
 export { runCli, type CliContext, type CliIo } from "./cli.js";
 export {
+  REFRESH_WITHIN_MS,
+  signInCredential,
+  type OidcAccess,
+  type Tokens,
+} from "./sign-in.js";
+export {
   FileKeyStore,
   OutdatedBletherHomeError,
   ReadMessages,
