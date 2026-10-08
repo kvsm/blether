@@ -46,7 +46,8 @@ const CAUGHT_UP_TIMEOUT_MS = 5_000;
 /** The relay refused something, or its answer didn't verify. */
 export class RelayError extends Error {
   constructor(
-    readonly code: ErrorCode | "disconnected" | "untrusted-reply",
+    readonly code:
+      ErrorCode | "disconnected" | "untrusted-reply" | "insecure-transport",
     message: string,
   ) {
     super(message);
@@ -105,6 +106,24 @@ export async function discoverRelay(url: string): Promise<RelayDiscovery> {
     throw new Error(`${http} answered with HTTP ${response.status}.`);
   }
   return RelayDiscovery.parse(await response.json());
+}
+
+/**
+ * Throws unless a sign-in credential can go to the relay at `url` without
+ * anyone on the network reading it: over wss://, or over ws:// only to this
+ * machine.
+ */
+export function checkCredentialTransport(url: string): void {
+  const { protocol, hostname } = new URL(url);
+  const loopback =
+    hostname === "localhost" ||
+    hostname === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname);
+  if (protocol === "wss:" || loopback) return;
+  throw new RelayError(
+    "insecure-transport",
+    `Not sending your sign-in to ${url}: ws:// isn't encrypted, so anyone on the network could read it. The relay needs to be reached over wss://, through a TLS proxy or tunnel, or with BLETHER_RELAY_TLS_CERT and BLETHER_RELAY_TLS_KEY (https://github.com/kvsm/blether/blob/main/docs/self-hosting.md).`,
+  );
 }
 
 /** Opens a WebSocket to the relay, sending `credential` as a bearer token. */
@@ -493,6 +512,7 @@ export class RelayConnection {
       credential,
     }: ConnectOptions = {},
   ): Promise<RelayConnection> {
+    if (credential) checkCredentialTransport(url);
     const socket = openSocket(url, credential);
     const connection = new RelayConnection(
       socket,

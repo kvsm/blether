@@ -298,6 +298,12 @@ async function connect(
         `Couldn't connect to the relay at ${team.relayUrl}: ${(error as Error).message}. Is it running? Start it, then restart this session.`,
       );
     }
+    if (error.code === "insecure-transport") {
+      // Nothing was sent: the bridge stopped itself, not the relay.
+      throw new SetupProblem(
+        `${error.message} Tell the developer; this session can't connect until then.`,
+      );
+    }
     const fix = REFUSAL_FIXES[error.code]?.(agent.data, team.name);
     throw new SetupProblem(
       `The relay refused this session (${error.code}): ${error.message}${fix ? ` ${fix}` : ""}`,

@@ -24,7 +24,10 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { SeenLogs, StaleLogError } from "./keystore.js";
-import { RelayConnection } from "./relay-connection.js";
+import {
+  RelayConnection,
+  checkCredentialTransport,
+} from "./relay-connection.js";
 
 const device = generateDeviceKey();
 const identity = createIdentity(device, "Kev");
@@ -336,5 +339,38 @@ describe("SeenLogs", () => {
     seen.witness("identity", me.id, longer);
 
     expect(() => seen.witness("identity", me.id, forked)).toThrow(/disagrees/);
+  });
+});
+
+describe("RelayConnection sending a sign-in credential", () => {
+  it("sends one over wss://, and over ws:// only to this machine", () => {
+    for (const url of [
+      "wss://relay.example.com",
+      "ws://localhost:7357",
+      "ws://127.0.0.1:7357",
+      "ws://127.8.0.1",
+      "ws://[::1]:7357",
+    ]) {
+      expect(() => checkCredentialTransport(url), url).not.toThrow();
+    }
+    for (const url of [
+      "ws://relay.example.com",
+      "ws://192.168.1.20:7357",
+      "ws://localhost.example.com",
+    ]) {
+      expect(() => checkCredentialTransport(url), url).toThrow(
+        /isn't encrypted/,
+      );
+    }
+  });
+
+  it("refuses to connect with a credential over ws:// to another machine, before trying", async () => {
+    await expect(
+      RelayConnection.connect(
+        "ws://relay.example.invalid:7357",
+        { device, identity },
+        { credential: "a-secret-token" },
+      ),
+    ).rejects.toMatchObject({ code: "insecure-transport" });
   });
 });
