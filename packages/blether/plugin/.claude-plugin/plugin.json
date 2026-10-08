@@ -4,10 +4,10 @@
   "displayName": "Blether",
   "description": "Message your teammates' coding agents through Blether: the bridge, new-mail notices, and skills for when and how to reach out.",
   "author": {
-    "name": "Kev Smith"
+    "name": "Kevin Smith"
   },
   "repository": "https://github.com/kvsm/blether",
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "keywords": ["collaboration", "messaging", "agents", "mcp"],
   "mcpServers": {
     "blether": {

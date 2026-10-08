@@ -2,7 +2,7 @@
   "name": "@blether/relay",
   "version": "0.2.5",
   "private": true,
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "description": "Self-hostable server that holds mailboxes and carries messages between a team's bridges.",
   "type": "module",
   "exports": {

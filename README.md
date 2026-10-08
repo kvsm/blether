@@ -356,4 +356,4 @@ npm publishing uses [trusted publishing](https://docs.npmjs.com/trusted-publishe
 
 ## License
 
-[MIT](LICENSE)
+[Functional Source License 1.1, Apache 2.0 future licence](LICENSE) (FSL-1.1-ALv2). You may use, change and self-host Blether for any purpose except offering it to others as a competing commercial product or service. Each version becomes available under the Apache License 2.0 two years after its release. Versions up to 0.2.5 were released under the MIT licence, and stay so.

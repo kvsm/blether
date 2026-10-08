@@ -2,7 +2,7 @@
   "name": "@blether/bridge",
   "version": "0.2.5",
   "private": true,
-  "license": "MIT",
+  "license": "FSL-1.1-ALv2",
   "description": "The local side of Blether: the bridge (an MCP server connecting an agent session to a relay) and the blether CLI.",
   "type": "module",
   "exports": {
