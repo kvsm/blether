@@ -116,28 +116,48 @@ tailscale funnel --bg 7357
 
 The relay reads its settings from the environment. The image sets the host, port and database for you.
 
-| Variable                          | Default                                      | What it does                                                                                                        |
-| --------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `BLETHER_RELAY_HOST`              | `127.0.0.1` (image: `0.0.0.0`)               | Address to listen on                                                                                                |
-| `BLETHER_RELAY_PORT`              | `7357`                                       | Port to listen on                                                                                                   |
-| `BLETHER_RELAY_DB`                | `blether-relay.db` (image: `/data/relay.db`) | The database holding teams, identities and mailboxes                                                                |
-| `BLETHER_RELAY_TLS_CERT`          |                                              | Certificate file (PEM), to serve `wss://` without a proxy                                                           |
-| `BLETHER_RELAY_TLS_KEY`           |                                              | The certificate's private key (PEM)                                                                                 |
-| `BLETHER_RELAY_HEARTBEAT_MS`      | `15000`                                      | How often to check connections are alive; two missed checks drop one                                                |
-| `BLETHER_RELAY_STATS_INTERVAL_MS` | `300000`                                     | How often to print [message statistics](#message-statistics), when there are new messages; `0` for only on shutdown |
-| `BLETHER_RELAY_DEBUG_AUDIENCE`    | `0`                                          | `1` for [debug mode](#message-statistics): count role messages and broadcasts too                                   |
-| `BLETHER_RELAY_ACCESS`            | `open`                                       | `token` to [require a sign-in](#require-a-sign-in)                                                                  |
-| `BLETHER_RELAY_TOKENS_FILE`       |                                              | For `token`: the JSON list of tokens the relay accepts                                                              |
-| `BLETHER_RELAY_ALLOW_CONNECT`     | `signed-in`                                  | Who may connect once signed in: `signed-in`, or comma-separated `claim=value` pairs                                 |
-| `BLETHER_RELAY_ALLOW_TEAM_CREATE` | `signed-in`                                  | Who may create teams once signed in: `signed-in`, or comma-separated `claim=value` pairs                            |
+| Variable                            | Default                                      | What it does                                                                                                        |
+| ----------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `BLETHER_RELAY_HOST`                | `127.0.0.1` (image: `0.0.0.0`)               | Address to listen on                                                                                                |
+| `BLETHER_RELAY_PORT`                | `7357`                                       | Port to listen on                                                                                                   |
+| `BLETHER_RELAY_DB`                  | `blether-relay.db` (image: `/data/relay.db`) | The database holding teams, identities and mailboxes                                                                |
+| `BLETHER_RELAY_TLS_CERT`            |                                              | Certificate file (PEM), to serve `wss://` without a proxy                                                           |
+| `BLETHER_RELAY_TLS_KEY`             |                                              | The certificate's private key (PEM)                                                                                 |
+| `BLETHER_RELAY_HEARTBEAT_MS`        | `15000`                                      | How often to check connections are alive; two missed checks drop one                                                |
+| `BLETHER_RELAY_STATS_INTERVAL_MS`   | `300000`                                     | How often to print [message statistics](#message-statistics), when there are new messages; `0` for only on shutdown |
+| `BLETHER_RELAY_DEBUG_AUDIENCE`      | `0`                                          | `1` for [debug mode](#message-statistics): count role messages and broadcasts too                                   |
+| `BLETHER_RELAY_ACCESS`              | `open`                                       | `token`, `entra` or `oidc` to [require a sign-in](#require-a-sign-in)                                               |
+| `BLETHER_RELAY_TOKENS_FILE`         |                                              | For `token`: the JSON list of tokens the relay accepts                                                              |
+| `BLETHER_RELAY_ENTRA_TENANT`        |                                              | For `entra`: the directory (tenant) id                                                                              |
+| `BLETHER_RELAY_ENTRA_API_CLIENT_ID` |                                              | For `entra`: the relay API registration's client id                                                                 |
+| `BLETHER_RELAY_ENTRA_CLI_CLIENT_ID` |                                              | For `entra`: the CLI registration's client id                                                                       |
+| `BLETHER_RELAY_ENTRA_SCOPE`         | `api://<API client id>/Relay.Access`         | For `entra`: the scope the CLI asks for                                                                             |
+| `BLETHER_RELAY_OIDC_ISSUER`         |                                              | For `oidc`: the issuer, exactly as tokens' `iss` gives it                                                           |
+| `BLETHER_RELAY_OIDC_AUDIENCE`       |                                              | For `oidc`: the audience (`aud`) access tokens must be for                                                          |
+| `BLETHER_RELAY_OIDC_CLIENT_ID`      |                                              | For `oidc`: the public client the CLI signs in as                                                                   |
+| `BLETHER_RELAY_OIDC_SCOPES`         | `openid offline_access`                      | For `oidc`: the scopes the CLI asks for, space-separated                                                            |
+| `BLETHER_RELAY_OIDC_SUBJECT_CLAIM`  | `sub`                                        | For `oidc`: the claim naming who signed in                                                                          |
+| `BLETHER_RELAY_OIDC_CLAIMS`         | `roles`                                      | For `oidc`: comma-separated claims the rules can check                                                              |
+| `BLETHER_RELAY_ALLOW_CONNECT`       | `signed-in`                                  | Who may connect once signed in: `signed-in`, or comma-separated `claim=value` pairs                                 |
+| `BLETHER_RELAY_ALLOW_TEAM_CREATE`   | `signed-in`                                  | Who may create teams once signed in: `signed-in`, or comma-separated `claim=value` pairs                            |
 
 `GET /healthz` answers `ok` for health checks, and `GET /.well-known/blether-relay` tells clients whether the relay requires a sign-in. Everything else is the WebSocket protocol bridges speak.
 
 ### Require a sign-in
 
-By default anyone who can reach the relay can use it: they can't read anyone's messages, but they can create identities and teams. To let in only the people you choose, give each one a token. Tokens need TLS: Blether only sends one over `wss://`, or over `ws://` to the same machine.
+By default anyone who can reach the relay can use it: they can't read anyone's messages, but they can create identities and teams. To let in only the people you choose, require a sign-in, in one of three ways:
 
-Issue a token with the relay's `token` command, naming who it's for. Claims are optional, for the rules below:
+- **[Tokens](#sign-in-with-tokens)** you issue to each developer. Nothing else to set up.
+- **[Microsoft Entra ID](#sign-in-with-microsoft-entra-id)**: developers sign in with their work account.
+- **[Another OpenID Connect provider](#sign-in-with-another-openid-connect-provider)**, such as Okta, Auth0 or Keycloak.
+
+A relay uses one of them. Whichever it is, developers run `blether sign-in wss://relay.example.com` (or `blether sign-in <invite>`, before joining), and Blether asks for what that relay needs. A sign-in decides who may use the relay, not who is in a team: Team Admins still invite people to their teams.
+
+A sign-in needs TLS: Blether only sends one over `wss://`, or over `ws://` to the same machine.
+
+#### Sign in with tokens
+
+Issue a token with the relay's `token` command, naming who it's for. Claims are optional, for the [rules](#rules) below:
 
 ```sh
 docker compose run --rm relay token kev roles=team-creator
@@ -164,15 +184,97 @@ services:
       - ./tokens.json:/tokens.json:ro
 ```
 
-Each developer runs `blether sign-in wss://relay.example.com` (or `blether sign-in <invite>`, before joining) and pastes their token. To take someone's access away, remove their line and restart the relay. They stay in their teams' membership until the Team Admin removes them, but can't connect.
+Each developer runs `blether sign-in` and pastes their token. To take someone's access away, remove their line and restart the relay. They stay in their teams' membership until the Team Admin removes them, but can't connect.
 
-Rules decide what a signed-in developer may do. For example, to let anyone with a token connect, but only those with the `team-creator` role create teams:
+#### Sign in with Microsoft Entra ID
+
+Developers sign in with their work account, in their browser. The relay checks each connection's access token from Entra, and Entra decides who can get one. You need two app registrations in your tenant, which someone with the Application Administrator role (or Cloud Application Administrator) can create:
+
+- **Blether relay**: the API the access tokens are for. It defines the `Relay.Access` scope, and any app roles you want rules to check.
+- **Blether CLI**: the public client that `blether sign-in` signs in as, with no secret.
+
+(If your tenant makes a second registration hard to get, one registration can be both: do every step below on the same registration, and use its client id for both settings. Two keeps the relay's API separate from the app developers sign in with, and is what Microsoft recommends.)
+
+**1. Register the relay's API.** In the [Entra admin center](https://entra.microsoft.com), go to **App registrations → New registration**:
+
+1. Name it `Blether relay`, choose **Accounts in this organizational directory only**, and leave the redirect URI empty. Register it.
+2. Note its **Application (client) ID** and **Directory (tenant) ID** from the overview.
+3. Under **Expose an API**, set the **Application ID URI** to the default it offers, `api://<its client id>`. Then **Add a scope**: name it `Relay.Access`, let **Admins and users** consent (or admins only, if you'll grant consent for everyone), and give it a display name such as "Use the Blether relay".
+4. Under **Manifest**, set `requestedAccessTokenVersion` (inside `api`) to `2`, and save. (In the older manifest format, it's `accessTokenAcceptedVersion`, at the top.) The relay only accepts version 2 access tokens; without this, Entra issues version 1 tokens, and every sign-in is refused.
+5. Optionally, under **App roles**, create roles for the [rules](#rules) to check, for **Users/Groups**: say `Relay.User` to connect at all, and `Relay.TeamCreator` to create teams. Assign them to people or groups in **Enterprise applications → Blether relay → Users and groups**. Creating teams needs a connection too, so give team creators both roles.
+
+**2. Register the CLI.** Back in **App registrations → New registration**:
+
+1. Name it `Blether CLI`, choose **Accounts in this organizational directory only**, and under **Redirect URI** choose **Public client/native (mobile & desktop)** with `http://localhost`. Register it. (Entra lets the CLI come back on any port of `http://localhost`.)
+2. Note its **Application (client) ID**.
+3. Under **Authentication**, set **Allow public client flows** to **Yes**. That's needed for `blether sign-in --device-code`.
+4. Under **API permissions**, **Add a permission → APIs my organization uses → Blether relay**, tick `Relay.Access` (delegated), and add it. Then **Grant admin consent**, so developers aren't each asked to consent.
+
+**3. Turn it on.** In `compose.override.yaml`, beside `compose.yaml`, then restart the relay with `docker compose up -d`:
+
+```yaml
+services:
+  relay:
+    environment:
+      BLETHER_RELAY_ACCESS: entra
+      BLETHER_RELAY_ENTRA_TENANT: <directory (tenant) id>
+      BLETHER_RELAY_ENTRA_API_CLIENT_ID: <Blether relay's client id>
+      BLETHER_RELAY_ENTRA_CLI_CLIENT_ID: <Blether CLI's client id>
+      # Optional: only people with these app roles.
+      BLETHER_RELAY_ALLOW_CONNECT: roles=Relay.User
+      BLETHER_RELAY_ALLOW_TEAM_CREATE: roles=Relay.TeamCreator
+```
+
+The relay only accepts tokens from your tenant, for the relay's API. It knows each person by their Entra object id (`oid`), which never changes, even if their name or email does. [Rules](#rules) can check `roles`, `tid`, `name` and `preferred_username`.
+
+**What developers do.** `blether sign-in wss://relay.example.com` opens their browser at Microsoft's sign-in page, with your tenant's usual sign-in, MFA and Conditional Access. Where there's no browser on the machine (over SSH, say), `blether sign-in --device-code wss://relay.example.com` gives them a code to enter in a browser anywhere. Some tenants block sign-in with a device code with Conditional Access; then they'll need the browser.
+
+After that, Blether renews the sign-in by itself, including on agent sessions that run for days, until Entra stops renewing it. That happens when the person is disabled or deleted, their sessions are revoked, their refresh token expires (after 90 days without use, by default), or Conditional Access asks them to sign in again. Blether then tells them to run `blether sign-in` again.
+
+**Taking access away.** Disable the person in Entra, or remove their app role if you use `BLETHER_RELAY_ALLOW_CONNECT`. Blether can't renew their sign-in after that, so the relay refuses them once the access token they have runs out: Entra's last between 60 and 90 minutes. Revoking their sessions doesn't make that sooner. They stay in their teams' membership until a Team Admin removes them.
+
+**If sign-in fails:**
+
+| What Blether says                                 | Likely cause                                                                                                   |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `AADSTS50011` (redirect URI mismatch)             | The CLI registration's redirect URI isn't `http://localhost` under **Public client/native (mobile & desktop)** |
+| `AADSTS65001` (consent)                           | Admin consent wasn't granted for `Relay.Access`, and users can't consent themselves                            |
+| `AADSTS7000218` or `AADSTS700016`                 | **Allow public client flows** is off, or a client id is wrong                                                  |
+| `AADSTS50105` (not assigned)                      | The relay's enterprise application requires assignment, and the person isn't assigned                          |
+| The relay refuses a sign-in Entra accepted        | `requestedAccessTokenVersion` isn't `2`, the API client id is wrong, or a rule leaves them out                 |
+| `--device-code` is refused, but the browser works | Conditional Access blocks the device code flow                                                                 |
+
+#### Sign in with another OpenID Connect provider
+
+Any provider that issues access tokens as JWTs, signed with a published key (RS256, ES256, EdDSA and the like), works the same way. In it, set up:
+
+- **An API (resource server)** for the relay, so access tokens name it in their `aud` claim. Some providers issue unreadable access tokens unless there is one: Okta needs an authorization server, Auth0 an API.
+- **A public client** (no secret) for the CLI, with the authorization code flow and PKCE, and a loopback redirect URI, `http://localhost`, on any port. Allow the device authorization grant too, for `--device-code`, and refresh tokens (usually the `offline_access` scope).
+
+Then:
+
+```yaml
+services:
+  relay:
+    environment:
+      BLETHER_RELAY_ACCESS: oidc
+      BLETHER_RELAY_OIDC_ISSUER: https://id.example.com/
+      BLETHER_RELAY_OIDC_AUDIENCE: <the API's audience>
+      BLETHER_RELAY_OIDC_CLIENT_ID: <the CLI's client id>
+      BLETHER_RELAY_OIDC_SCOPES: openid offline_access relay
+```
+
+The issuer must be exactly what tokens give as `iss`, trailing slash and all. The relay finds the provider's signing keys from its discovery document (`/.well-known/openid-configuration` under the issuer), and picks up new ones when the provider rotates them. It knows people by the `sub` claim, unless `BLETHER_RELAY_OIDC_SUBJECT_CLAIM` names another, and [rules](#rules) can check `roles`, or the claims `BLETHER_RELAY_OIDC_CLAIMS` lists.
+
+#### Rules
+
+Rules decide what a signed-in developer may do. For example, to let anyone signed in connect, but only those with the `team-creator` role create teams:
 
 ```yaml
 BLETHER_RELAY_ALLOW_TEAM_CREATE: roles=team-creator
 ```
 
-A claim matches if it equals the value, or is a list that includes it.
+A claim matches if it equals the value, or is a list that includes it. Several comma-separated `claim=value` pairs allow anyone matching any of them.
 
 ### Message statistics
 
