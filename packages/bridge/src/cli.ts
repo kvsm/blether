@@ -58,6 +58,7 @@ import {
 import {
   RelayConnection,
   RelayError,
+  checkCredentialTransport,
   discoverRelay,
 } from "./relay-connection.js";
 import { SessionFileError, writeSessionFile } from "./session-file.js";
@@ -353,6 +354,8 @@ function relayFor(target: string | undefined, ctx: CliContext): string {
 async function signIn(args: string[], ctx: CliContext): Promise<number> {
   const url = relayFor(args[0], ctx);
   const credentials = loadCredentials(ctx.store);
+  // Before anything else: there's no safe way to sign in over plain ws://.
+  checkCredentialTransport(url);
   let discovery;
   try {
     discovery = await discoverRelay(url);

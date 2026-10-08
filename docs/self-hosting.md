@@ -135,7 +135,7 @@ The relay reads its settings from the environment. The image sets the host, port
 
 ### Require a sign-in
 
-By default anyone who can reach the relay can use it: they can't read anyone's messages, but they can create identities and teams. To let in only the people you choose, give each one a token.
+By default anyone who can reach the relay can use it: they can't read anyone's messages, but they can create identities and teams. To let in only the people you choose, give each one a token. Tokens need TLS: Blether only sends one over `wss://`, or over `ws://` to the same machine.
 
 Issue a token with the relay's `token` command, naming who it's for. Claims are optional, for the rules below:
 

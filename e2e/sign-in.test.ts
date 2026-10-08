@@ -1,7 +1,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runCli, startBridge, type StartedBridge } from "@blether/bridge";
+import {
+  SignIns,
+  runCli,
+  startBridge,
+  type StartedBridge,
+} from "@blether/bridge";
 import {
   startRelay,
   tokenAccess,
@@ -125,6 +130,17 @@ describe("signing in to a relay", () => {
     expect(err.join("\n")).toContain("interactive terminal");
   });
 
+  it("won't sign in over unencrypted ws:// to another machine, and doesn't ask for the token", async () => {
+    relay = await startRelay();
+    kev.typeSecret(KEV_TOKEN);
+
+    const result = await kev.run("sign-in", "ws://relay.example.invalid:7357");
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("isn't encrypted");
+    expect(kev.asked).toEqual([]);
+  });
+
   it("says an open relay needs no sign-in", async () => {
     relay = await startRelay();
 
@@ -166,6 +182,34 @@ describe("signing in to a relay", () => {
 
     expect(result.code).toBe(1);
     expect(result.err).toContain("doesn't allow you to create teams");
+  });
+
+  it("won't send a stored sign-in to a team's relay over unencrypted ws://", async () => {
+    relay = await startRelay();
+    // A team whose relay is on another machine, reached over plain ws://.
+    const remote = "ws://relay.example.invalid:7357";
+    kev.teams.save({ name: "backend", id: "a-team-id", relayUrl: remote });
+    new SignIns(kev.store.home).save(remote, {
+      kind: "token",
+      credential: KEV_TOKEN,
+      signedInAt: new Date().toISOString(),
+    });
+
+    const members = await kev.run("team", "members", "backend");
+    started = await startBridge(
+      {
+        BLETHER_HOME: kev.store.home,
+        BLETHER_PROJECT_DIR: join(root, "elsewhere"),
+        BLETHER_TEAM: "backend",
+        BLETHER_AGENT: "web",
+      },
+      () => {},
+    );
+
+    expect(members.code).toBe(1);
+    expect(members.err).toContain("isn't encrypted");
+    expect(started.problem).toContain("isn't encrypted");
+    expect(started.problem).not.toContain("relay refused");
   });
 
   it("tells the agent the developer must sign in when the bridge can't", async () => {
