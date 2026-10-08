@@ -10,6 +10,7 @@ import {
   randomToken,
   verifyChallenge,
   verifyIdentityLog,
+  verifyInviteProof,
   verifyTeamLog,
   type AgentName,
   type ErrorCode,
@@ -388,11 +389,25 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
         }
 
         case "get-team": {
+          // Members, and someone proving they hold an open invite, can read
+          // the log. Everyone else is answered as if the team didn't exist.
           const log = store.teamLog(frame.team);
-          if (!log) {
+          const team = log && verifyTeam(log);
+          const mayRead =
+            team &&
+            (team.members.includes(developer.id) ||
+              (frame.invite !== undefined &&
+                verifyInviteProof(
+                  team,
+                  frame.invite.id,
+                  challenge,
+                  frame.invite.proof,
+                  now(),
+                )));
+          if (!log || !mayRead) {
             fail(
               "unknown-team",
-              "This relay has no such team.",
+              "This relay has no such team, or you aren't a member of it.",
               frame.requestId,
             );
             return;

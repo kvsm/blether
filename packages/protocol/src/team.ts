@@ -369,6 +369,51 @@ export function acceptInvite(
 }
 
 /**
+ * Someone holding an invite isn't a member yet, but needs the team's log to
+ * join it. The relay shows it to them if they prove they hold the invite's
+ * secret, by signing the connection's challenge with the invite key. The
+ * challenge ties the proof to one connection, so it can't be replayed.
+ */
+const INVITE_PROOF_CONTEXT = "blether-invite-proof-v1";
+
+function inviteProofMessage(
+  challenge: string,
+  team: string,
+  invite: string,
+): string {
+  return [INVITE_PROOF_CONTEXT, challenge, team, invite].join("\n");
+}
+
+/** Proves, on the connection that was sent `challenge`, that the caller holds invite `invite` to team `team`. */
+export function proveInvite(
+  secret: string,
+  challenge: string,
+  team: string,
+  invite: string,
+): Signature {
+  return sign(
+    keyFromSecret(INVITE_KEY_CONTEXT, secret),
+    inviteProofMessage(challenge, team, invite),
+  );
+}
+
+/** True if `proof` was made with the secret of `invite`, a still-open invite to `team`, for `challenge`. */
+export function verifyInviteProof(
+  team: Team,
+  invite: string,
+  challenge: string,
+  proof: string,
+  now = new Date(),
+): boolean {
+  const held = team.invites.find((i) => i.id === invite);
+  return (
+    held !== undefined &&
+    isInviteOpen(held, now) &&
+    verify(held.key, inviteProofMessage(challenge, team.id, invite), proof)
+  );
+}
+
+/**
  * Checks every entry of `log` and returns the team it describes. `identities`
  * must include every author, keyed by identity id. Throws TeamError if the log
  * doesn't verify.

@@ -12,6 +12,8 @@ import {
   createTeam,
   generateDeviceKey,
   parseFrame,
+  proveInvite,
+  revokeInvite,
   signChallenge,
   verifyIdentityLog,
   verifyTeamLog,
@@ -84,6 +86,8 @@ function helloFrame(scope: Scope, challenge: string, as: Developer) {
 class TestClient {
   private readonly frames: RelayFrame[] = [];
   private waiters: (() => void)[] = [];
+  /** The challenge this connection answered in its hello. */
+  challenge = "";
 
   private constructor(readonly socket: WebSocket) {
     socket.on("message", (data) => {
@@ -131,6 +135,7 @@ class TestClient {
     extra: Record<string, unknown> = {},
   ) {
     const { challenge } = await this.next("challenge");
+    this.challenge = challenge;
     this.send({ ...helloFrame(scope, challenge, as), ...extra });
     return this.next();
   }
@@ -473,8 +478,111 @@ describe("relay", () => {
   });
 
   describe("team logs", () => {
-    it("returns a team's log with the identities needed to verify it", async () => {
+    /** Alice invites someone; returns the invite's id and secret. */
+    const invite = async () => {
+      const {
+        entry,
+        invite: id,
+        secret,
+      } = createInvite(ctx.team, alice.signer);
+      await append(entry, alice);
+      return { id, secret };
+    };
+
+    /** Asks for the team's log, proving `held` was handed to this connection. */
+    const getWithInvite = (
+      session: TestClient,
+      held: { id: string; secret: string },
+      challenge = session.challenge,
+    ) =>
+      session.teamRequest({
+        type: "get-team",
+        team: ctx.team.id,
+        invite: {
+          id: held.id,
+          proof: proveInvite(held.secret, challenge, ctx.team.id, held.id),
+        },
+      });
+
+    /** The relay's answer for a team it doesn't host, to compare refusals against. */
+    const noSuchTeam = async () => {
       const session = await cli(carol);
+      const reply = await session.teamRequest({
+        type: "get-team",
+        team: "no-such-team",
+      });
+      return { ...reply, id: undefined };
+    };
+
+    it("refuses a non-member's request for a team's log, as if the team didn't exist", async () => {
+      const session = await cli(carol);
+      const reply = await session.teamRequest({
+        type: "get-team",
+        team: ctx.team.id,
+      });
+
+      expect(reply).toMatchObject({ type: "error", code: "unknown-team" });
+      expect({ ...reply, id: undefined }).toEqual(await noSuchTeam());
+    });
+
+    it("returns a team's log to someone who proves they hold an open invite", async () => {
+      const held = await invite();
+      const session = await cli(carol);
+
+      expect(await getWithInvite(session, held)).toMatchObject({
+        type: "team",
+        log: ctx.log,
+      });
+    });
+
+    it("refuses a proof made with the wrong secret, as if the team didn't exist", async () => {
+      const held = await invite();
+      const session = await cli(carol);
+      const reply = await getWithInvite(session, {
+        id: held.id,
+        secret: "s".repeat(43),
+      });
+
+      expect({ ...reply, id: undefined }).toEqual(await noSuchTeam());
+    });
+
+    it("refuses a proof made for another connection's challenge", async () => {
+      const held = await invite();
+      const other = await cli(carol);
+      const session = await cli(carol);
+      const reply = await getWithInvite(session, held, other.challenge);
+
+      expect(reply).toMatchObject({ type: "error", code: "unknown-team" });
+    });
+
+    it("refuses a proof for an invite that has been revoked", async () => {
+      const held = await invite();
+      await append(revokeInvite(ctx.team, held.id, alice.signer), alice);
+      const session = await cli(carol);
+
+      expect(await getWithInvite(session, held)).toMatchObject({
+        type: "error",
+        code: "unknown-team",
+      });
+    });
+
+    it("refuses a proof for an invite that has been used", async () => {
+      const held = await invite();
+      await append(
+        acceptInvite(ctx.team, held.id, held.secret, carol.signer),
+        carol,
+      );
+      // Carol is a member now, so someone else tries the same invite.
+      const session = await cli(newDeveloper("Dave"));
+
+      expect(await getWithInvite(session, held)).toMatchObject({
+        type: "error",
+        code: "unknown-team",
+      });
+    });
+
+    it("returns a team's log with the identities needed to verify it", async () => {
+      const session = await cli(bob);
       const reply = await session.teamRequest({
         type: "get-team",
         team: ctx.team.id,
@@ -903,6 +1011,27 @@ describe("relay invite expiry", () => {
         entry: join,
       }),
     ).toMatchObject({ type: "error", code: "team-rejected" });
+  });
+
+  it("refuses to show the team's log for an invite that has expired by the relay's clock", async () => {
+    clock = new Date();
+    const { entry, invite, secret } = createInvite(ctx.team, alice.signer, {
+      ttlHours: 1,
+    });
+    await append(entry, alice);
+    clock = new Date(Date.now() + 2 * 3_600_000);
+    const session = await cli(carol);
+
+    expect(
+      await session.teamRequest({
+        type: "get-team",
+        team: ctx.team.id,
+        invite: {
+          id: invite,
+          proof: proveInvite(secret, session.challenge, ctx.team.id, invite),
+        },
+      }),
+    ).toMatchObject({ type: "error", code: "unknown-team" });
   });
 });
 
