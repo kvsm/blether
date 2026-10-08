@@ -208,7 +208,7 @@ Developers sign in with their work account, in their browser. The relay checks e
 1. Name it `Blether CLI`, choose **Accounts in this organizational directory only**, and under **Redirect URI** choose **Public client/native (mobile & desktop)** with `http://localhost`. Register it. (Entra lets the CLI come back on any port of `http://localhost`.)
 2. Note its **Application (client) ID**.
 3. Under **Authentication**, set **Allow public client flows** to **Yes**. That's needed for `blether sign-in --device-code`.
-4. Under **API permissions**, **Add a permission → APIs my organization uses → Blether relay**, tick `Relay.Access` (delegated), and add it. Then **Grant admin consent**, so developers aren't each asked to consent.
+4. Under **API permissions**, **Add a permission → APIs my organization uses → Blether relay**, tick `Relay.Access` (delegated), and add it. Add **Microsoft Graph → Delegated → `offline_access`** too: it lets Blether renew the sign-in, and gives no access to anyone's data. Then **Grant admin consent** for both, so developers aren't each asked to consent, or stopped where users can't.
 
 **3. Turn it on.** In `compose.override.yaml`, beside `compose.yaml`, then restart the relay with `docker compose up -d`:
 
