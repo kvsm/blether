@@ -8,6 +8,7 @@ import {
   type AccessProvider,
   type Rules,
 } from "./access.js";
+import { entraSettings, oidcAccess } from "./oidc.js";
 import type { RelayOptions } from "./relay.js";
 
 /** A setting the operator got wrong, explained without a stack trace. */
@@ -28,9 +29,28 @@ export const RELAY_ENV = {
   BLETHER_RELAY_HEARTBEAT_MS:
     "How often to check connections are alive (default 15000)",
   BLETHER_RELAY_ACCESS:
-    "Who may connect: open (anyone, the default) or token (a token listed in BLETHER_RELAY_TOKENS_FILE)",
+    "Who may connect: open (anyone, the default), token (a token listed in BLETHER_RELAY_TOKENS_FILE), oidc (an OpenID Connect access token) or entra (Microsoft Entra ID)",
   BLETHER_RELAY_TOKENS_FILE:
     "For BLETHER_RELAY_ACCESS=token: a JSON list of the entries `blether-relay token` prints; read at start-up",
+  BLETHER_RELAY_OIDC_ISSUER:
+    "For oidc: the issuer, exactly as access tokens' iss claim gives it",
+  BLETHER_RELAY_OIDC_AUDIENCE:
+    "For oidc: the audience (aud) access tokens must be for",
+  BLETHER_RELAY_OIDC_CLIENT_ID:
+    "For oidc: the public client id the CLI signs in as",
+  BLETHER_RELAY_OIDC_SCOPES:
+    "For oidc: the scopes the CLI asks for, space-separated (default openid offline_access)",
+  BLETHER_RELAY_OIDC_SUBJECT_CLAIM:
+    "For oidc: the claim naming who signed in (default sub)",
+  BLETHER_RELAY_OIDC_CLAIMS:
+    "For oidc: comma-separated claims the ALLOW rules can check (default roles)",
+  BLETHER_RELAY_ENTRA_TENANT: "For entra: the directory (tenant) id",
+  BLETHER_RELAY_ENTRA_API_CLIENT_ID:
+    "For entra: the relay API app registration's application (client) id",
+  BLETHER_RELAY_ENTRA_CLI_CLIENT_ID:
+    "For entra: the CLI app registration's application (client) id",
+  BLETHER_RELAY_ENTRA_SCOPE:
+    "For entra: the scope the CLI asks for (default api://<API client id>/Relay.Access)",
   BLETHER_RELAY_ALLOW_CONNECT:
     "Who may connect once signed in: signed-in (the default), or comma-separated claim=value pairs, any of which allows it",
   BLETHER_RELAY_ALLOW_TEAM_CREATE:
@@ -72,12 +92,67 @@ export function relayConfig(
 
 function accessProvider(env: NodeJS.ProcessEnv): AccessProvider {
   const kind = env.BLETHER_RELAY_ACCESS || "open";
-  if (kind === "open") return openAccess();
-  if (kind !== "token") {
-    throw new RelayConfigError(
-      `BLETHER_RELAY_ACCESS must be open or token, not "${kind}".`,
-    );
+  switch (kind) {
+    case "open":
+      return openAccess();
+    case "token":
+      return tokens(env);
+    case "oidc":
+      return oidcAccess({
+        issuer: url(env, "BLETHER_RELAY_OIDC_ISSUER"),
+        audience: required(env, "BLETHER_RELAY_OIDC_AUDIENCE", kind),
+        clientId: required(env, "BLETHER_RELAY_OIDC_CLIENT_ID", kind),
+        scopes: (env.BLETHER_RELAY_OIDC_SCOPES || "openid offline_access")
+          .split(/\s+/)
+          .filter(Boolean),
+        ...(env.BLETHER_RELAY_OIDC_SUBJECT_CLAIM
+          ? { subjectClaim: env.BLETHER_RELAY_OIDC_SUBJECT_CLAIM }
+          : {}),
+        ...(env.BLETHER_RELAY_OIDC_CLAIMS
+          ? { claims: list(env.BLETHER_RELAY_OIDC_CLAIMS) }
+          : {}),
+      });
+    case "entra":
+      return oidcAccess(
+        entraSettings({
+          tenant: required(env, "BLETHER_RELAY_ENTRA_TENANT", kind),
+          apiClientId: required(env, "BLETHER_RELAY_ENTRA_API_CLIENT_ID", kind),
+          cliClientId: required(env, "BLETHER_RELAY_ENTRA_CLI_CLIENT_ID", kind),
+          ...(env.BLETHER_RELAY_ENTRA_SCOPE
+            ? { scope: env.BLETHER_RELAY_ENTRA_SCOPE }
+            : {}),
+        }),
+      );
+    default:
+      throw new RelayConfigError(
+        `BLETHER_RELAY_ACCESS must be open, token, oidc or entra, not "${kind}".`,
+      );
   }
+}
+
+function required(env: NodeJS.ProcessEnv, name: string, kind: string) {
+  const value = env[name];
+  if (!value) {
+    throw new RelayConfigError(`BLETHER_RELAY_ACCESS=${kind} needs ${name}.`);
+  }
+  return value;
+}
+
+function url(env: NodeJS.ProcessEnv, name: string) {
+  const value = required(env, name, "oidc");
+  if (!URL.canParse(value)) {
+    throw new RelayConfigError(`${name} must be a URL, not "${value}".`);
+  }
+  return value;
+}
+
+const list = (text: string) =>
+  text
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+function tokens(env: NodeJS.ProcessEnv): AccessProvider {
   const file = env.BLETHER_RELAY_TOKENS_FILE;
   if (!file) {
     throw new RelayConfigError(

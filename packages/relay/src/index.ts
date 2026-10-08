@@ -7,3 +7,9 @@ export {
   type Principal,
   type Rules,
 } from "./access.js";
+export {
+  entraSettings,
+  oidcAccess,
+  type EntraSettings,
+  type OidcSettings,
+} from "./oidc.js";

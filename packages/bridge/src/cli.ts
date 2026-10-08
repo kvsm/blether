@@ -368,6 +368,11 @@ async function signIn(args: string[], ctx: CliContext): Promise<number> {
     ctx.io.out(`The relay at ${url} doesn't need a sign-in.`);
     return 0;
   }
+  if (discovery.access.kind !== "token") {
+    throw new CliError(
+      `The relay at ${url} uses ${discovery.access.kind} sign-in, which this version of Blether can't do yet. Update Blether.`,
+    );
+  }
   const credential = await askSecret(
     ctx,
     `Paste the token the relay's operator gave you for ${url}:`,
