@@ -3,4 +3,4 @@
  * every workspace package share. Change it with `pnpm set-version <version>`;
  * a test fails if they ever differ.
  */
-export const BLETHER_VERSION = "0.2.5";
+export const BLETHER_VERSION = "0.2.6";
