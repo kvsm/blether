@@ -1,6 +1,6 @@
 {
   "name": "@blether/protocol",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "license": "MIT",
   "description": "Message and envelope types shared by the Blether bridge and relay.",
