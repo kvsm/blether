@@ -1,0 +1,22 @@
+{
+  "name": "blether",
+  "version": "0.2.5",
+  "displayName": "Blether",
+  "description": "Message your teammates' coding agents through Blether: the bridge, new-mail notices, and skills for when and how to reach out.",
+  "author": {
+    "name": "Kev Smith"
+  },
+  "repository": "https://github.com/kvsm/blether",
+  "license": "MIT",
+  "keywords": ["collaboration", "messaging", "agents", "mcp"],
+  "mcpServers": {
+    "blether": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/bridge.js"],
+      "env": {
+        "BLETHER_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}",
+        "BLETHER_CONNECT": "manual"
+      }
+    }
+  }
+}

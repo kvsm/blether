@@ -1,0 +1,199 @@
+import { z } from "zod";
+import {
+  PublicKey,
+  Signature,
+  canonicalJson,
+  openSealed,
+  sealFor,
+  sign,
+  verify,
+  type DeviceKey,
+} from "./crypto.js";
+import { AgentName, RoleName } from "./names.js";
+
+/**
+ * End-to-end encrypted messages (ADR 0005).
+ *
+ * The sending device signs the message's payload, then seals a separate copy
+ * of the signed payload for each of the recipient developer's devices. The
+ * relay only ever handles the envelope: one opaque copy per device key.
+ *
+ * Opening a copy proves nothing about who sent it; the recipient must check
+ * the signer against the team log (see the bridge).
+ */
+
+/** Version of the message envelope. Bumped when the format changes. */
+export const ENVELOPE_VERSION = 1;
+
+const SIGNING_CONTEXT = "blether-message-v1";
+
+/**
+ * Who a message was addressed to, when it went to more than one agent. Each
+ * recipient still gets their own copy, addressed to them in `to`.
+ */
+export const Audience = z.discriminatedUnion("kind", [
+  /** Every agent holding the role. */
+  z.object({ kind: z.literal("role"), role: RoleName }),
+  /** Every other agent in the team (a broadcast). */
+  z.object({ kind: z.literal("everyone") }),
+]);
+export type Audience = z.infer<typeof Audience>;
+
+/** Something attached to a message: a code snippet, a diff, or a link. */
+export const Attachment = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("snippet"),
+    title: z.string().max(200).optional(),
+    /** The snippet's language, e.g. "ts", for display. */
+    language: z.string().max(40).optional(),
+    content: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("diff"),
+    title: z.string().max(200).optional(),
+    content: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("link"),
+    title: z.string().max(200).optional(),
+    url: z.url(),
+  }),
+]);
+export type Attachment = z.infer<typeof Attachment>;
+
+/** Most attachments one message may carry. */
+export const MAX_ATTACHMENTS = 10;
+/** Most characters a message's body and attachments may hold together. */
+export const MAX_MESSAGE_CHARS = 32_000;
+
+/** A message's content and addressing, as signed by the sender. */
+export const MessagePayload = z.object({
+  id: z.uuid(),
+  team: z.string(),
+  from: AgentName,
+  to: AgentName,
+  /** Set when the message went to a role or the whole team. */
+  audience: Audience.optional(),
+  /**
+   * `hold-notice`: sent by the sender's bridge (not written by its agent)
+   * when that agent escalates one of the recipient's messages: direct, with
+   * the held message's id in inReplyTo, no attachments, and exactly
+   * holdNoticeBody(id) as its body. Absent for an ordinary message.
+   */
+  kind: z.enum(["hold-notice"]).optional(),
+  /** The message this replies to. */
+  inReplyTo: z.uuid().optional(),
+  /** The thread it belongs to: the id of the message that started it. Absent for a message that starts one. */
+  thread: z.uuid().optional(),
+  body: z.string().min(1),
+  attachments: z.array(Attachment).max(MAX_ATTACHMENTS).optional(),
+  /** When the sender sent it, by the sender's clock. */
+  sentAt: z.iso.datetime(),
+});
+export type MessagePayload = z.infer<typeof MessagePayload>;
+
+/** The fixed text of a hold notice about message `id`. */
+export function holdNoticeBody(id: string): string {
+  return `Holding your message ${id} until my developer answers.`;
+}
+
+/**
+ * The id of the message a hold notice is about, or undefined if `payload`
+ * isn't a well-formed hold notice. Anything else signed as a hold notice
+ * (say, free text from a modified client) is an ordinary message. Earlier
+ * bridges put the id only in the text, not in inReplyTo.
+ */
+export function heldMessageId(payload: MessagePayload): string | undefined {
+  if (payload.kind !== "hold-notice") return undefined;
+  if (payload.audience || (payload.attachments?.length ?? 0) > 0) {
+    return undefined;
+  }
+  const id =
+    payload.inReplyTo ??
+    /^Holding your message ([0-9a-f-]{36}) /.exec(payload.body)?.[1];
+  return id !== undefined && payload.body === holdNoticeBody(id)
+    ? id
+    : undefined;
+}
+
+const SignedPayload = z.object({
+  payload: MessagePayload,
+  /** The sending device's public key. */
+  signer: PublicKey,
+  signature: Signature,
+});
+
+/** What the relay stores and delivers: one sealed copy per recipient device. */
+export const Envelope = z.object({
+  v: z.literal(ENVELOPE_VERSION),
+  copies: z.record(PublicKey, z.string().min(1)).refine((copies) => {
+    const count = Object.keys(copies).length;
+    return count >= 1 && count <= 32;
+  }, "An envelope holds between 1 and 32 copies."),
+});
+export type Envelope = z.infer<typeof Envelope>;
+
+function signingContent(payload: MessagePayload): string {
+  return `${SIGNING_CONTEXT}\n${canonicalJson(payload)}`;
+}
+
+/** Signs `payload` with `sender` and seals a copy for each of `recipients`. */
+export function sealMessage(
+  payload: MessagePayload,
+  sender: DeviceKey,
+  recipients: readonly PublicKey[],
+): Envelope {
+  if (recipients.length === 0) {
+    throw new Error("A message needs at least one recipient device.");
+  }
+  const signed = JSON.stringify({
+    payload: MessagePayload.parse(payload),
+    signer: sender.publicKey,
+    signature: sign(sender, signingContent(payload)),
+  });
+  return {
+    v: ENVELOPE_VERSION,
+    copies: Object.fromEntries(
+      [...new Set(recipients)].map((device) => [
+        device,
+        sealFor(device, signed),
+      ]),
+    ),
+  };
+}
+
+export type OpenedMessage =
+  | { ok: true; payload: MessagePayload; signer: PublicKey }
+  | {
+      ok: false;
+      /**
+       * `elsewhere`: no copy for this device (it was sealed for the
+       * developer's other devices). `unreadable`: the copy didn't decrypt or
+       * parse. `bad-signature`: it decrypted but the signature doesn't verify.
+       */
+      reason: "elsewhere" | "unreadable" | "bad-signature";
+    };
+
+/** Opens this device's copy of `envelope` and checks its signature. */
+export function openMessage(
+  envelope: Envelope,
+  device: DeviceKey,
+): OpenedMessage {
+  const copy = envelope.copies[device.publicKey];
+  if (!copy) return { ok: false, reason: "elsewhere" };
+  const plaintext = openSealed(device, copy);
+  if (plaintext === undefined) return { ok: false, reason: "unreadable" };
+
+  let signed: z.infer<typeof SignedPayload>;
+  try {
+    signed = SignedPayload.parse(JSON.parse(plaintext));
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  if (
+    !verify(signed.signer, signingContent(signed.payload), signed.signature)
+  ) {
+    return { ok: false, reason: "bad-signature" };
+  }
+  return { ok: true, payload: signed.payload, signer: signed.signer };
+}

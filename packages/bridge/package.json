@@ -1,0 +1,29 @@
+{
+  "name": "@blether/bridge",
+  "version": "0.2.5",
+  "private": true,
+  "license": "MIT",
+  "description": "The local side of Blether: the bridge (an MCP server connecting an agent session to a relay) and the blether CLI.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "blether": "./dist/cli-bin.js",
+    "blether-bridge": "./dist/bin.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@blether/protocol": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@secretlint/core": "^13.0.6",
+    "@secretlint/secretlint-rule-preset-recommend": "^13.0.6",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
+  }
+}

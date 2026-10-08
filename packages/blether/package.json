@@ -1,0 +1,45 @@
+{
+  "name": "@kvsm/blether",
+  "version": "0.2.5",
+  "description": "Agent-to-agent communication for distributed teams of human developers: the blether CLI, the bridge (an MCP server), and the Claude Code plugin.",
+  "keywords": [
+    "agents",
+    "mcp",
+    "claude-code",
+    "collaboration",
+    "messaging"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/kvsm/blether#readme",
+  "bugs": "https://github.com/kvsm/blether/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kvsm/blether.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "blether": "plugin/dist/cli.js",
+    "blether-bridge": "plugin/dist/bridge.js"
+  },
+  "files": [
+    ".claude-plugin",
+    "plugin"
+  ],
+  "scripts": {
+    "bundle": "node bundle.mjs",
+    "smoke": "node smoke.mjs",
+    "prepack": "node bundle.mjs"
+  },
+  "devDependencies": {
+    "@blether/bridge": "workspace:*",
+    "@blether/relay": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "esbuild": "^0.28.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
