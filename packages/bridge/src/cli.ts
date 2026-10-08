@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 import { parseArgs } from "node:util";
 import {
   AgentName,
@@ -38,6 +39,7 @@ import {
   FileKeyStore,
   OutdatedBletherHomeError,
   SeenLogs,
+  SignIns,
   TeamDirectory,
   type Credentials,
   type TeamRecord,
@@ -53,7 +55,11 @@ import {
   PolicyStore,
   type ApprovalPolicy,
 } from "./policy.js";
-import { RelayConnection, RelayError } from "./relay-connection.js";
+import {
+  RelayConnection,
+  RelayError,
+  discoverRelay,
+} from "./relay-connection.js";
 import { SessionFileError, writeSessionFile } from "./session-file.js";
 import { watchInbox } from "./watch.js";
 import {
@@ -78,7 +84,10 @@ const USAGE = `Usage: blether <command>
 
 Commands:
   init --name <name>                 Create this device's key and your Blether identity
-  whoami                             Show your identity
+  whoami                             Show your identity, and the relays you're signed in to
+  sign-in <team | relay-url | invite>
+                                     Sign in to a relay that requires it, with what its operator gave you
+  sign-out <team | relay-url>        Forget your sign-in to a relay
   team create <name> --relay <url>   Start a team on a relay; you become its Team Admin
   team list                          List the teams you belong to
   team members <team>                Show a team's members and open invites
@@ -127,6 +136,8 @@ export interface CliIo {
   err: (line: string) => void;
   /** Asks a yes/no question. Defaults to prompting on an interactive terminal, and "no" otherwise. */
   confirm?: (question: string) => Promise<boolean>;
+  /** Asks for a secret without echoing it. Defaults to an interactive terminal, and nothing otherwise. */
+  secret?: (question: string) => Promise<string | undefined>;
 }
 
 export interface CliContext {
@@ -195,6 +206,10 @@ async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
       return init(rest, ctx);
     case "whoami":
       return whoami(ctx);
+    case "sign-in":
+      return signIn(rest, ctx);
+    case "sign-out":
+      return signOut(rest, ctx);
     case "team": {
       const [sub, ...args] = rest;
       if (sub === "create") return teamCreate(args, ctx);
@@ -312,7 +327,96 @@ function whoami({ store, io }: CliContext): number {
   io.out(`Name:     ${identity.name}`);
   io.out(`Identity: ${identity.id}`);
   io.out(`Device:   ${deviceFingerprint(credentials.device.publicKey)}`);
+  const signIns = new SignIns(store.home).list();
+  if (signIns.length > 0) {
+    io.out("Signed in to:");
+    for (const { url, kind, signedInAt } of signIns) {
+      io.out(`  ${url}  (${kind}, since ${signedInAt.slice(0, 10)})`);
+    }
+  }
   return 0;
+}
+
+/**
+ * The relay a sign-in command means: a team's relay, a relay URL, or the
+ * relay in an invite link (to sign in before joining).
+ */
+function relayFor(target: string | undefined, ctx: CliContext): string {
+  if (!target) {
+    throw new CliError("Say which relay: a team, a relay URL or an invite.");
+  }
+  if (/^wss?:\/\//.test(target)) return target;
+  if (target.startsWith("blether")) return parseInviteLink(target).relayUrl;
+  return loadTeam(ctx.teams, target).relayUrl;
+}
+
+async function signIn(args: string[], ctx: CliContext): Promise<number> {
+  const url = relayFor(args[0], ctx);
+  const credentials = loadCredentials(ctx.store);
+  let discovery;
+  try {
+    discovery = await discoverRelay(url);
+  } catch (error) {
+    throw new CliError(
+      `Couldn't ask the relay at ${url} how to sign in: ${(error as Error).message}`,
+    );
+  }
+  if (discovery.access.kind === "open") {
+    ctx.io.out(`The relay at ${url} doesn't need a sign-in.`);
+    return 0;
+  }
+  const credential = await askSecret(
+    ctx,
+    `Paste the token the relay's operator gave you for ${url}:`,
+  );
+  if (!credential) throw new CliError("Not signed in.");
+  // Check the relay accepts it before keeping it.
+  await withRelay(ctx, url, credentials, async () => {}, credential);
+  new SignIns(ctx.store.home).save(url, {
+    kind: "token",
+    credential,
+    signedInAt: now(ctx).toISOString(),
+  });
+  ctx.io.out(`Signed in to the relay at ${url}.`);
+  return 0;
+}
+
+function signOut(args: string[], ctx: CliContext): number {
+  const url = relayFor(args[0], ctx);
+  ctx.io.out(
+    new SignIns(ctx.store.home).remove(url)
+      ? `Signed out of the relay at ${url}.`
+      : `You weren't signed in to the relay at ${url}.`,
+  );
+  return 0;
+}
+
+/**
+ * Asks for something secret without echoing it. Only at an interactive
+ * terminal: a sign-in is the developer's to give, not an agent's.
+ */
+async function askSecret(
+  ctx: CliContext,
+  question: string,
+): Promise<string | undefined> {
+  if (ctx.io.secret) return ctx.io.secret(question);
+  if (!process.stdin.isTTY) {
+    ctx.io.err("Run this in an interactive terminal to sign in.");
+    return undefined;
+  }
+  process.stdout.write(`${question} `);
+  const silent = new Writable({ write: (_chunk, _encoding, done) => done() });
+  const rl = createInterface({
+    input: process.stdin,
+    output: silent,
+    terminal: true,
+  });
+  try {
+    return (await rl.question("")).trim();
+  } finally {
+    rl.close();
+    process.stdout.write("\n");
+  }
 }
 
 function deviceRequest({ store, io }: CliContext): number {
@@ -1415,11 +1519,13 @@ async function withRelay<T>(
   url: string,
   credentials: Credentials,
   action: (relay: RelayConnection) => Promise<T>,
+  credential = new SignIns(ctx.store.home).credential(url),
 ): Promise<T> {
   let relay: RelayConnection;
   try {
     relay = await RelayConnection.connect(url, credentials, {
       witness: new SeenLogs(ctx.store.home),
+      credential,
     });
     if (relay.identity && relay.identity.length > credentials.identity.length) {
       ctx.store.saveIdentity(relay.identity);
