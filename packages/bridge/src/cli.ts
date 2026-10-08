@@ -1102,7 +1102,7 @@ async function claudeInstall(ctx: CliContext): Promise<number> {
 
 /**
  * Offers to add Claude Code deny rules for the Blether home and the
- * trust-changing commands (#73), asking first since they change the
+ * trust-changing commands, asking first since they change the
  * developer's own settings. Resolves to false if the settings couldn't be read.
  */
 async function offerDenyRules(ctx: CliContext): Promise<boolean> {

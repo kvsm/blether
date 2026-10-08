@@ -152,7 +152,7 @@ export function bletherHomeRule(home: string, userHome = homedir()): string {
 /**
  * Deny rules that keep Claude Code away from the Blether home (device keys,
  * Approval Policy) and from the commands that change membership, devices or
- * the policy. They're only as strong as Claude Code's enforcement: see #73.
+ * the policy. They're only as strong as Claude Code's enforcement.
  */
 export function denyRules(bletherHome: string): string[] {
   const home = bletherHomeRule(bletherHome);
