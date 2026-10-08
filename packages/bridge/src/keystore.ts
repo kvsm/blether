@@ -134,6 +134,62 @@ export class FileKeyStore {
   }
 }
 
+const SignIn = z.object({
+  kind: z.literal("token"),
+  credential: z.string().min(1),
+  signedInAt: z.string(),
+});
+export type SignIn = z.infer<typeof SignIn>;
+
+/** Relays are keyed by URL without a trailing slash, however they were written. */
+const relayKey = (url: string) => new URL(url).href.replace(/\/$/, "");
+
+/**
+ * The credential this device signs in to each relay with, in a file readable
+ * only by the current user, next to the device key.
+ */
+export class SignIns {
+  constructor(readonly home: string = defaultBletherHome()) {}
+
+  private get path() {
+    return join(this.home, "sign-ins.json");
+  }
+
+  private read(): Record<string, SignIn> {
+    return existsSync(this.path)
+      ? z.record(z.string(), SignIn).parse(readJson(this.path))
+      : {};
+  }
+
+  /** The credential for the relay at `url`, if this device has signed in to it. */
+  credential(url: string): string | undefined {
+    return this.read()[relayKey(url)]?.credential;
+  }
+
+  save(url: string, signIn: SignIn): void {
+    mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    writePrivate(this.path, { ...this.read(), [relayKey(url)]: signIn });
+  }
+
+  /** Forgets the sign-in for `url`. Returns false if there wasn't one. */
+  remove(url: string): boolean {
+    const all = this.read();
+    if (!(relayKey(url) in all)) return false;
+    delete all[relayKey(url)];
+    writePrivate(this.path, all);
+    return true;
+  }
+
+  /** Every relay this device has signed in to, without the credentials. */
+  list(): { url: string; kind: SignIn["kind"]; signedInAt: string }[] {
+    return Object.entries(this.read()).map(([url, { kind, signedInAt }]) => ({
+      url,
+      kind,
+      signedInAt,
+    }));
+  }
+}
+
 /** A relay served a log older than, or inconsistent with, one this device has already verified. */
 export class StaleLogError extends Error {
   constructor(

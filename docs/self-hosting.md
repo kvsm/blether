@@ -126,8 +126,53 @@ The relay reads its settings from the environment. The image sets the host, port
 | `BLETHER_RELAY_HEARTBEAT_MS`      | `15000`                                      | How often to check connections are alive; two missed checks drop one                                                |
 | `BLETHER_RELAY_STATS_INTERVAL_MS` | `300000`                                     | How often to print [message statistics](#message-statistics), when there are new messages; `0` for only on shutdown |
 | `BLETHER_RELAY_DEBUG_AUDIENCE`    | `0`                                          | `1` for [debug mode](#message-statistics): count role messages and broadcasts too                                   |
+| `BLETHER_RELAY_ACCESS`            | `open`                                       | `token` to [require a sign-in](#require-a-sign-in)                                                                  |
+| `BLETHER_RELAY_TOKENS_FILE`       |                                              | For `token`: the JSON list of tokens the relay accepts                                                              |
+| `BLETHER_RELAY_ALLOW_CONNECT`     | `signed-in`                                  | Who may connect once signed in: `signed-in`, or comma-separated `claim=value` pairs                                 |
+| `BLETHER_RELAY_ALLOW_TEAM_CREATE` | `signed-in`                                  | Who may create teams once signed in: `signed-in`, or comma-separated `claim=value` pairs                            |
 
-`GET /healthz` answers `ok` for health checks; everything else is the WebSocket protocol bridges speak.
+`GET /healthz` answers `ok` for health checks, and `GET /.well-known/blether-relay` tells clients whether the relay requires a sign-in. Everything else is the WebSocket protocol bridges speak.
+
+### Require a sign-in
+
+By default anyone who can reach the relay can use it: they can't read anyone's messages, but they can create identities and teams. To let in only the people you choose, give each one a token.
+
+Issue a token with the relay's `token` command, naming who it's for. Claims are optional, for the rules below:
+
+```sh
+docker compose run --rm relay token kev roles=team-creator
+```
+
+It prints the token, which you send to that developer privately, and a line to add to the tokens file. The relay keeps only the token's hash. Put the lines in a JSON list in `tokens.json`, beside `compose.yaml`:
+
+```json
+[
+  { "subject": "kev", "sha256": "…", "claims": { "roles": "team-creator" } },
+  { "subject": "ann", "sha256": "…" }
+]
+```
+
+Then turn sign-in on with a `compose.override.yaml` beside it, which Docker Compose reads along with `compose.yaml`, and restart the relay with `docker compose up -d`:
+
+```yaml
+services:
+  relay:
+    environment:
+      BLETHER_RELAY_ACCESS: token
+      BLETHER_RELAY_TOKENS_FILE: /tokens.json
+    volumes:
+      - ./tokens.json:/tokens.json:ro
+```
+
+Each developer runs `blether sign-in wss://relay.example.com` (or `blether sign-in <invite>`, before joining) and pastes their token. To take someone's access away, remove their line and restart the relay. They stay in their teams' membership until the Team Admin removes them, but can't connect.
+
+Rules decide what a signed-in developer may do. For example, to let anyone with a token connect, but only those with the `team-creator` role create teams:
+
+```yaml
+BLETHER_RELAY_ALLOW_TEAM_CREATE: roles=team-creator
+```
+
+A claim matches if it equals the value, or is a list that includes it.
 
 ### Message statistics
 

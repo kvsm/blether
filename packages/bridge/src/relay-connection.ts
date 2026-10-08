@@ -11,6 +11,8 @@ import {
   sealMessage,
   proveInvite,
   signChallenge,
+  DISCOVERY_PATH,
+  RelayDiscovery,
   verifyIdentityLog,
   verifyTeamLog,
   type AgentName,
@@ -84,6 +86,60 @@ export interface ConnectOptions {
   reconnectDelaysMs?: readonly number[];
   /** How often to check the relay is still answering. Defaults to 15 seconds. */
   heartbeatMs?: number;
+  /** The credential to sign in with, for a relay that requires one (`blether sign-in`). */
+  credential?: string | undefined;
+}
+
+/**
+ * Asks the relay at `url` (ws:// or wss://) how it admits connections. A
+ * relay from before sign-in existed has no discovery document (it answers
+ * 426, asking for a WebSocket), and is open.
+ */
+export async function discoverRelay(url: string): Promise<RelayDiscovery> {
+  const http = new URL(DISCOVERY_PATH, url.replace(/^ws/, "http"));
+  const response = await fetch(http, { signal: AbortSignal.timeout(10_000) });
+  if (response.status === 404 || response.status === 426) {
+    return { access: { kind: "open" } };
+  }
+  if (!response.ok) {
+    throw new Error(`${http} answered with HTTP ${response.status}.`);
+  }
+  return RelayDiscovery.parse(await response.json());
+}
+
+/** Opens a WebSocket to the relay, sending `credential` as a bearer token. */
+function openSocket(url: string, credential: string | undefined): WebSocket {
+  return new WebSocket(
+    url,
+    credential ? { headers: { authorization: `Bearer ${credential}` } } : {},
+  );
+}
+
+/** Explains a relay refusing the WebSocket upgrade with HTTP `status`. */
+function refusal(
+  url: string,
+  status: number | undefined,
+  authenticate: string | undefined,
+): Error {
+  if (status === 401 && authenticate?.includes("invalid_token")) {
+    return new RelayError(
+      "sign-in-refused",
+      `The relay at ${url} didn't accept your sign-in; it may have expired or been revoked. Run \`blether sign-in ${url}\` in a terminal.`,
+    );
+  }
+  if (status === 401) {
+    return new RelayError(
+      "sign-in-required",
+      `The relay at ${url} requires a sign-in. Run \`blether sign-in ${url}\` in a terminal.`,
+    );
+  }
+  if (status === 403) {
+    return new RelayError(
+      "not-allowed",
+      `Your sign-in doesn't allow you to use the relay at ${url}. Ask whoever runs it.`,
+    );
+  }
+  return new Error(`The relay answered with HTTP ${status ?? "?"}.`);
 }
 
 /** Waits before each attempt to reconnect: about five minutes in all. */
@@ -263,6 +319,7 @@ export class RelayConnection {
     private socket: WebSocket,
     private readonly url: string,
     private readonly credentials: Credentials,
+    private readonly credential: string | undefined,
     readonly scope: AgentScope | undefined,
     private readonly witness: LogWitness | undefined,
     private readonly readMessages: ReadMessageLog | undefined,
@@ -357,7 +414,7 @@ export class RelayConnection {
     for (const delay of this.reconnectDelaysMs) {
       await new Promise((resolve) => setTimeout(resolve, delay).unref());
       if (this.closing) break;
-      const socket = new WebSocket(this.url);
+      const socket = openSocket(this.url, this.credential);
       this.socket = socket;
       this.attach(socket);
       try {
@@ -433,13 +490,15 @@ export class RelayConnection {
       log,
       reconnectDelaysMs = RECONNECT_DELAYS_MS,
       heartbeatMs = HEARTBEAT_MS,
+      credential,
     }: ConnectOptions = {},
   ): Promise<RelayConnection> {
-    const socket = new WebSocket(url);
+    const socket = openSocket(url, credential);
     const connection = new RelayConnection(
       socket,
       url,
       credentials,
+      credential,
       scope,
       witness,
       readMessages,
@@ -509,6 +568,18 @@ export class RelayConnection {
     await new Promise((resolve, reject) => {
       socket.once("open", resolve);
       socket.once("error", reject);
+      // The relay refuses a connection it won't admit before it opens.
+      socket.once("unexpected-response", (_request, response) => {
+        response.resume();
+        reject(
+          refusal(
+            this.url,
+            response.statusCode,
+            response.headers["www-authenticate"],
+          ),
+        );
+        socket.terminate();
+      });
     });
     const challenge = await challenged;
     this.answeredChallenge = challenge;
@@ -518,7 +589,12 @@ export class RelayConnection {
       ...(takeover ? { takeover: true } : {}),
       identity: credentials.identity,
       device: credentials.device.publicKey,
-      signature: signChallenge(credentials.device, challenge, scope ?? {}),
+      signature: signChallenge(
+        credentials.device,
+        challenge,
+        scope ?? {},
+        this.credential,
+      ),
     });
     const welcome = await welcomed;
     this.identity = this.checkOwnIdentity(

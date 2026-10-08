@@ -5,6 +5,7 @@ import {
   FileKeyStore,
   RelayConnection,
   SentLog,
+  SignIns,
   TeamDirectory,
   createBridgeServer,
   runCli,
@@ -26,6 +27,7 @@ export function device(root: string, name: string) {
   const store = new FileKeyStore(join(root, name));
   const teams = new TeamDirectory(store.home);
   let answer = true;
+  let secret: string | undefined;
   const asked: string[] = [];
   let clock: Date | undefined;
 
@@ -41,6 +43,10 @@ export function device(root: string, name: string) {
         confirm: async (question) => {
           asked.push(question);
           return answer;
+        },
+        secret: async (question) => {
+          asked.push(question);
+          return secret;
         },
       },
       ...(clock ? { now: () => clock! } : {}),
@@ -67,6 +73,10 @@ export function device(root: string, name: string) {
     /** What the developer answers when asked to confirm something. */
     answer(value: boolean) {
       answer = value;
+    },
+    /** What the developer types when asked for a secret, such as a sign-in token. */
+    typeSecret(value: string | undefined) {
+      secret = value;
     },
     /** Pretends it's `date` for the CLI's sense of time. */
     setClock(date: Date) {
@@ -105,7 +115,11 @@ export function device(root: string, name: string) {
       const connection = await RelayConnection.connect(
         record.relayUrl,
         store.load()!,
-        { scope: { team: record.id, agent }, ...(log ? { log } : {}) },
+        {
+          scope: { team: record.id, agent },
+          credential: new SignIns(store.home).credential(record.relayUrl),
+          ...(log ? { log } : {}),
+        },
       );
       const client = new Client(
         { name: agent, version: "0.0.0" },

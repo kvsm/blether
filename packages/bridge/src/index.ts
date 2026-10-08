@@ -33,6 +33,7 @@ export {
   OutdatedBletherHomeError,
   ReadMessages,
   SeenLogs,
+  SignIns,
   StaleLogError,
   TeamDirectory,
   type LogWitness,

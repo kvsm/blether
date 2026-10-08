@@ -4,6 +4,7 @@ import {
   FileKeyStore,
   ReadMessages,
   SeenLogs,
+  SignIns,
   TeamDirectory,
   defaultBletherHome,
   type Credentials,
@@ -48,6 +49,12 @@ const REFUSAL_FIXES: Partial<
     `The relay doesn't know ${team}; it may have been reset. Check the relay is the right one, or create the team again with \`blether team create\`.`,
   "authentication-failed": () =>
     "This device's identity didn't verify. Check `blether whoami`; if it's damaged, set this device up again.",
+  "sign-in-required": (_agent, team) =>
+    `Ask the developer to run \`blether sign-in ${team}\` in their own terminal (it won't run in yours), then connect again.`,
+  "sign-in-refused": (_agent, team) =>
+    `Ask the developer to run \`blether sign-in ${team}\` in their own terminal (it won't run in yours), then connect again.`,
+  "not-allowed": () =>
+    "The relay's rules don't let the developer's sign-in do this. Ask them to check with whoever runs the relay.",
   "identity-conflict": () =>
     "The relay holds a different history for your identity than this device does. Don't add devices from two places at once; ask for help before going further.",
 };
@@ -332,6 +339,7 @@ async function open(
     takeover,
     log,
     ...timings,
+    credential: new SignIns(store.home).credential(team.relayUrl),
   });
   // Another of the developer's devices may have added a device since.
   if (relay.identity && relay.identity.length > credentials.identity.length) {

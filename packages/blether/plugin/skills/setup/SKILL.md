@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 Walk the developer through each step in order, running the commands yourself and showing what they print. Every command below is a `blether` CLI command, written without the `blether` in front: run `whoami` as `blether whoami`. The plugin puts `blether` on your Bash `PATH`.
 
-Team membership and devices are the developer's own decisions. `join`, `invite`, `team remove`, `device add` and `device revoke` ask them to confirm at an interactive terminal, and refuse in your shell, so don't run them: give the developer the exact command to run in their own terminal, and wait for them to say it's done.
+Team membership, devices and sign-ins are the developer's own decisions. `join`, `invite`, `team remove`, `device add`, `device revoke` and `sign-in` need an interactive terminal, and refuse in your shell, so don't run them: give the developer the exact command to run in their own terminal, and wait for them to say it's done.
 
 ## 1. Identity
 
@@ -26,6 +26,8 @@ Run `team list`.
 - They're in the team they want: go on.
 - They have an invite: ask them to run `blether join <invite>` in their own terminal. It shows the team and relay, and asks them to confirm. Then run `team list`.
 - They're starting a team: ask for the team name and the relay URL, and run `team create <name> --relay <url>`. To bring teammates in, they run `blether invite <team>` in their own terminal and share the link privately.
+
+If the relay requires a sign-in, `join` or `team create` says so. Ask them to run `blether sign-in <invite>` (before joining) or `blether sign-in <relay-url>` in their own terminal, and paste the token the relay's operator gave them. Then try again.
 
 Done when `team list` shows the team.
 
