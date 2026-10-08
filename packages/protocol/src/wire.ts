@@ -148,6 +148,16 @@ export const ErrorCode = z.enum([
   "agent-in-use",
   "unknown-agent",
   "duplicate-id",
+  /** The relay's rules don't let this developer's sign-in do that. */
+  "not-allowed",
+  /**
+   * The relay refused the connection before it opened: it requires a
+   * sign-in and got no credential (sign-in-required) or one it doesn't
+   * accept (sign-in-refused). Clients report these; the relay can't send
+   * them as frames.
+   */
+  "sign-in-required",
+  "sign-in-refused",
 ]);
 export type ErrorCode = z.infer<typeof ErrorCode>;
 

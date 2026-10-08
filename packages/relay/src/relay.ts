@@ -1,8 +1,14 @@
-import { createServer as createHttpServer, type Server } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type Server,
+} from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 import {
   ClientFrame,
+  DISCOVERY_PATH,
   IdentityError,
   TeamError,
   compareLogs,
@@ -16,10 +22,19 @@ import {
   type ErrorCode,
   type Identity,
   type Message,
+  type RelayDiscovery,
   type RelayFrame,
   type Team,
   type TeamLog,
 } from "@blether/protocol";
+import {
+  ALLOW_SIGNED_IN,
+  allows,
+  openAccess,
+  type AccessProvider,
+  type Principal,
+  type Rules,
+} from "./access.js";
 import { WebSocketServer, type WebSocket } from "ws";
 import { MailboxStore } from "./mailbox-store.js";
 import { RelayStats } from "./stats.js";
@@ -32,6 +47,11 @@ export interface RelayOptions {
   databasePath?: string;
   /** Clock used to enforce invite expiry. */
   now?: () => Date;
+  /**
+   * Who may connect, and what their sign-in lets them do. Defaults to an
+   * open relay, where anyone may connect and create teams.
+   */
+  access?: { provider: AccessProvider; rules?: Rules };
   /**
    * How often to check each connection is still alive. A connection that
    * misses two checks in a row is dropped, which frees its agent for another
@@ -75,6 +95,70 @@ interface AgentScope {
 
 const sessionKey = ({ team, agent }: AgentScope) => `${team}\n${agent}`;
 
+/** A connection the sign-in provider let in, and the credential it sent. */
+interface Admission {
+  principal: Principal;
+  credential: string | undefined;
+}
+
+/** An HTTP answer refusing a WebSocket upgrade. */
+interface Refusal {
+  status: number;
+  reason: string;
+  /** The WWW-Authenticate header (RFC 6750) for a sign-in problem. */
+  authenticate?: string;
+  message: string;
+}
+
+const REQUIRED: Refusal = {
+  status: 401,
+  reason: "Unauthorized",
+  authenticate: 'Bearer realm="blether"',
+  message: "This relay requires a sign-in: run `blether sign-in` for it.\n",
+};
+const REFUSED: Refusal = {
+  status: 401,
+  reason: "Unauthorized",
+  authenticate: 'Bearer realm="blether", error="invalid_token"',
+  message:
+    "This relay didn't accept your sign-in: run `blether sign-in` for it again.\n",
+};
+const NOT_ALLOWED: Refusal = {
+  status: 403,
+  reason: "Forbidden",
+  message: "Your sign-in doesn't allow you to use this relay.\n",
+};
+const UNAVAILABLE: Refusal = {
+  status: 503,
+  reason: "Service Unavailable",
+  message: "The relay couldn't check your sign-in. Try again later.\n",
+};
+
+/**
+ * The credential in an Authorization header: undefined if there's no
+ * header, and null if it isn't a bearer credential.
+ */
+function bearerCredential(
+  header: string | undefined,
+): string | null | undefined {
+  if (header === undefined) return undefined;
+  const match = /^Bearer +(\S+) *$/i.exec(header);
+  return match ? match[1]! : null;
+}
+
+function refuseUpgrade(socket: Duplex, refusal: Refusal) {
+  const head = [
+    `HTTP/1.1 ${refusal.status} ${refusal.reason}`,
+    ...(refusal.authenticate
+      ? [`WWW-Authenticate: ${refusal.authenticate}`]
+      : []),
+    "Content-Type: text/plain; charset=utf-8",
+    `Content-Length: ${Buffer.byteLength(refusal.message)}`,
+    "Connection: close",
+  ];
+  socket.end(`${head.join("\r\n")}\r\n\r\n${refusal.message}`);
+}
+
 /**
  * Starts a relay that holds teams' membership logs and agents' mailboxes, and
  * passes messages between connected bridges.
@@ -93,13 +177,21 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     options.log ? { log: options.log } : {},
   );
   const now = options.now ?? (() => new Date());
+  const access = options.access?.provider ?? openAccess();
+  const rules = options.access?.rules ?? ALLOW_SIGNED_IN;
   const http: Server = options.tls
     ? createHttpsServer({ cert: options.tls.cert, key: options.tls.key })
     : createHttpServer();
-  // Plain HTTP is only for health checks; everything else is WebSocket.
+  // Plain HTTP is only for health checks and discovery; everything else is
+  // WebSocket.
   http.on("request", (req, res) => {
     if (req.method === "GET" && req.url === "/healthz") {
       res.writeHead(200, { "content-type": "text/plain" }).end("ok\n");
+    } else if (req.method === "GET" && req.url === DISCOVERY_PATH) {
+      const discovery: RelayDiscovery = { access: access.describe() };
+      res
+        .writeHead(200, { "content-type": "application/json" })
+        .end(JSON.stringify(discovery));
     } else {
       res
         .writeHead(426, { "content-type": "text/plain", upgrade: "websocket" })
@@ -107,11 +199,43 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
     }
   });
   const wss = new WebSocketServer({
-    server: http,
+    noServer: true,
     // Generous for a 32,000-character message sealed for many devices,
     // and a bound on what any one frame can make the relay hold.
     maxPayload: 8 * 1024 * 1024,
   });
+  // A connection must sign in, if the relay requires it, before it becomes
+  // a WebSocket at all.
+  const admissions = new WeakMap<WebSocket, Admission>();
+  http.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // A client that hangs up mid-check mustn't take the relay down.
+    socket.on("error", () => {});
+    void admit(req.headers.authorization).then(
+      (admission) => {
+        if ("status" in admission) {
+          refuseUpgrade(socket, admission);
+          return;
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          admissions.set(ws, admission);
+          wss.emit("connection", ws, req);
+        });
+      },
+      () => refuseUpgrade(socket, UNAVAILABLE),
+    );
+  });
+
+  /** Checks a connection's credential and the `connect` rule. */
+  const admit = async (
+    authorization: string | undefined,
+  ): Promise<Admission | Refusal> => {
+    const credential = bearerCredential(authorization);
+    if (credential === null) return REFUSED;
+    const principal = await access.authenticate(credential);
+    if (!principal) return credential === undefined ? REQUIRED : REFUSED;
+    if (!allows(rules, principal, "connect")) return NOT_ALLOWED;
+    return { principal, credential };
+  };
   await new Promise<void>((resolve, reject) => {
     http.once("error", reject);
     http.listen(options.port ?? 0, options.host ?? "127.0.0.1", () => {
@@ -203,6 +327,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
   });
 
   wss.on("connection", (socket) => {
+    const { principal, credential } = admissions.get(socket)!;
     const challenge = randomToken();
     let developer: Identity | undefined;
     let scope: AgentScope | undefined;
@@ -273,6 +398,7 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
             challenge,
             { team: frame.team, agent: frame.agent },
             frame.signature,
+            credential,
           )
         ) {
           refuse(
@@ -363,6 +489,14 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
 
       switch (frame.type) {
         case "create-team": {
+          if (!allows(rules, principal, "team.create")) {
+            fail(
+              "not-allowed",
+              "Your sign-in doesn't allow you to create teams on this relay.",
+              frame.requestId,
+            );
+            return;
+          }
           const [first] = frame.log;
           if (frame.log.length !== 1 || first!.author !== developer.id) {
             fail(
