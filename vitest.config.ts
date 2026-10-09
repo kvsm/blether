@@ -17,7 +17,11 @@ export default defineConfig({
   },
   test: {
     include: ["packages/*/src/**/*.test.ts", "e2e/**/*.test.ts"],
-    // Never the developer's own Claude Code settings, whatever a test forgets.
-    env: { CLAUDE_CONFIG_DIR: join(tmpdir(), "blether-test-claude") },
+    env: {
+      // Never the developer's own Claude Code settings, whatever a test forgets.
+      CLAUDE_CONFIG_DIR: join(tmpdir(), "blether-test-claude"),
+      // Nor their keychain: only storage-key.test.ts uses a real one, when asked.
+      BLETHER_KEYCHAIN: "off",
+    },
   },
 });

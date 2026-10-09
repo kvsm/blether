@@ -11,6 +11,7 @@ import { BLETHER_VERSION, verifyIdentityLog } from "@blether/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "./cli.js";
 import { FileKeyStore } from "./keystore.js";
+import { SecretBox } from "./storage-key.js";
 
 describe("blether CLI", () => {
   let home: string;
@@ -107,6 +108,35 @@ describe("blether CLI", () => {
 
     expect(await run("whoami")).toBe(0);
     expect(out[0]).toBe("Name:     Kev");
+  });
+
+  it("encrypts a device key stored as it is once there's a keychain, and says so", async () => {
+    await run("init", "--name", "Kev");
+    expect(out).toContain(
+      "Your device key is in a file only you can read (no keychain: BLETHER_KEYCHAIN is off).",
+    );
+    let key: Buffer | undefined;
+    store = new FileKeyStore(
+      store.home,
+      new SecretBox({
+        name: "the test keychain",
+        read: () => key,
+        write: (k) => (key = k),
+        delete: () => (key = undefined),
+      }),
+    );
+    out = [];
+
+    expect(await run("whoami")).toBe(0);
+    expect(err).toEqual([
+      "Encrypted your device key, with its storage key in the test keychain.",
+    ]);
+    expect(out).toContain(
+      "Key:      encrypted, with its storage key in the test keychain",
+    );
+    err = [];
+    expect(await run("whoami")).toBe(0);
+    expect(err).toEqual([]);
   });
 
   it("whoami explains when there is no identity yet", async () => {

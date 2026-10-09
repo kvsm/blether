@@ -25,6 +25,9 @@ jobs:
       - run: pnpm format:check
       - run: pnpm typecheck
       - run: pnpm test
+        env:
+          # Also test the real keychain where runners have one.
+          BLETHER_KEYCHAIN_TEST: ${{ matrix.os != 'ubuntu-latest' && '1' || '' }}
       # The npm package: bundle the CLI and bridge, and check they run alone.
       - run: pnpm build
       - run: pnpm --filter @kvsm/blether smoke
