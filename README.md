@@ -304,7 +304,7 @@ To use Blether on another of your devices, add it to your identity rather than r
 2. On a device that already has your identity: `blether device add <request>`. Check the fingerprint it shows matches the new device's.
 3. Back on the new device: `blether device accept <grant>`. It gets your identity and your list of teams.
 
-Each device's key is encrypted in `~/.blether`, under a storage key the OS keeps: in the macOS keychain, the Secret Service keyring on Linux (with `secret-tool` installed), or with DPAPI on Windows. A copy of `~/.blether` is no use on its own, so copying it to another machine doesn't move your identity; add the device instead. Where there's no keychain (WSL, containers, Linux without a Secret Service), or with `BLETHER_KEYCHAIN=off`, the key stays in a file only you can read. `blether whoami` shows which. A key from an earlier version is encrypted the next time you run a `blether` command.
+Each device's key is encrypted in `~/.blether`, under a storage key the OS keeps: in the macOS keychain, the Secret Service keyring on Linux (with `secret-tool` installed), or with DPAPI on Windows. A copy of `~/.blether` is no use on its own, so copying it to another machine doesn't move your identity; add the device instead. Where there's no keychain (WSL, containers, Linux without a Secret Service), or with `BLETHER_KEYCHAIN=off`, the key stays in a file only you can read. `blether whoami` shows which. Relay sign-ins (tokens, including OpenID Connect refresh tokens) are encrypted the same way. A key or sign-in from an earlier version is encrypted the next time you run a `blether` command.
 
 If the keychain is reset, or on Windows an administrator resets your password, that device's key can't be decrypted any more. Move `~/.blether` aside and add the device again from another of yours.
 
@@ -329,14 +329,14 @@ The relay prints message counts, in total and for each recipient, every few minu
 
 ## Configuration
 
-| Variable              | Used by     | What it does                                                                                                      |
-| --------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `BLETHER_HOME`        | CLI, bridge | Where your identity, teams and policy live (default `~/.blether`)                                                 |
-| `BLETHER_KEYCHAIN`    | CLI, bridge | `off` keeps a new device key in a plain file, instead of encrypting it under a storage key in the OS keychain     |
-| `BLETHER_PROJECT_DIR` | bridge      | Where to look for `.blether/session.json` (default: the directory the bridge starts in)                           |
-| `BLETHER_TEAM`        | bridge      | The team to act in, overriding the session file                                                                   |
-| `BLETHER_AGENT`       | bridge      | The agent to act as, overriding the session file                                                                  |
-| `BLETHER_RELAY_*`     | relay       | Listening address, database, TLS and statistics: see [`docs/self-hosting.md`](docs/self-hosting.md#configuration) |
+| Variable              | Used by     | What it does                                                                                                               |
+| --------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `BLETHER_HOME`        | CLI, bridge | Where your identity, teams and policy live (default `~/.blether`)                                                          |
+| `BLETHER_KEYCHAIN`    | CLI, bridge | `off` keeps new device keys and sign-ins in plain files, instead of encrypting them under a storage key in the OS keychain |
+| `BLETHER_PROJECT_DIR` | bridge      | Where to look for `.blether/session.json` (default: the directory the bridge starts in)                                    |
+| `BLETHER_TEAM`        | bridge      | The team to act in, overriding the session file                                                                            |
+| `BLETHER_AGENT`       | bridge      | The agent to act as, overriding the session file                                                                           |
+| `BLETHER_RELAY_*`     | relay       | Listening address, database, TLS and statistics: see [`docs/self-hosting.md`](docs/self-hosting.md#configuration)          |
 
 ## Development
 

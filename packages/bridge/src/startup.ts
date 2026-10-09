@@ -339,7 +339,7 @@ async function open(
   takeover: boolean,
   server?: McpServer,
 ): Promise<Opened> {
-  const signIns = new SignIns(store.home);
+  const signIns = new SignIns(store.home, store.box);
   const credential = await signInCredential(signIns, team.relayUrl).catch(
     (error: Error) => {
       // The relay says whether the one there is will do.

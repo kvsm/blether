@@ -223,18 +223,24 @@ export async function runCli(
   }
 }
 
-/** Encrypts a device key stored as it is, once there's a keychain (ADR 0011). */
+/** Encrypts a device key and sign-ins stored as they are, once there's a keychain (ADR 0011). */
 function encryptStoredKeys({ store, io }: CliContext) {
-  let keychain;
-  try {
-    keychain = store.encryptStoredKeys();
-  } catch {
-    // The command reports a key it can't read.
-    return;
-  }
-  if (keychain) {
-    io.err(`Encrypted your device key, with its storage key in ${keychain}.`);
-  }
+  const encrypt = (what: string, run: () => string | undefined) => {
+    let keychain;
+    try {
+      keychain = run();
+    } catch {
+      // The command reports what it can't read.
+      return;
+    }
+    if (keychain) {
+      io.err(`Encrypted your ${what}, with the storage key in ${keychain}.`);
+    }
+  };
+  encrypt("device key", () => store.encryptStoredKeys());
+  encrypt("relay sign-ins", () =>
+    new SignIns(store.home, store.box).encryptStored(),
+  );
 }
 
 async function dispatch(argv: string[], ctx: CliContext): Promise<number> {
@@ -367,7 +373,7 @@ function whoami({ store, io }: CliContext): number {
   io.out(`Identity: ${identity.id}`);
   io.out(`Device:   ${deviceFingerprint(credentials.device.publicKey)}`);
   io.out(`Key:      ${store.keyProtection()}`);
-  const signIns = new SignIns(store.home).list();
+  const signIns = new SignIns(store.home, store.box).list();
   if (signIns.length > 0) {
     io.out("Signed in to:");
     for (const { url, kind, signedInAt } of signIns) {
@@ -424,7 +430,7 @@ async function signIn(args: string[], ctx: CliContext): Promise<number> {
   if (!credential) throw new CliError("Not signed in.");
   // Check the relay accepts it before keeping it.
   await withRelay(ctx, url, credentials, async () => {}, credential);
-  new SignIns(ctx.store.home).save(url, {
+  new SignIns(ctx.store.home, ctx.store.box).save(url, {
     kind: "token",
     credential,
     signedInAt: now(ctx).toISOString(),
@@ -459,7 +465,10 @@ async function signInWithOidc(
   }
   // Check the relay accepts it before keeping it.
   await withRelay(ctx, url, credentials, async () => {}, tokens.accessToken);
-  new SignIns(ctx.store.home).save(url, oidcSignIn(access, tokens, now(ctx)));
+  new SignIns(ctx.store.home, ctx.store.box).save(
+    url,
+    oidcSignIn(access, tokens, now(ctx)),
+  );
   ctx.io.out(`Signed in to the relay at ${url}.`);
   return 0;
 }
@@ -467,7 +476,7 @@ async function signInWithOidc(
 function signOut(args: string[], ctx: CliContext): number {
   const url = relayFor(args[0], ctx);
   ctx.io.out(
-    new SignIns(ctx.store.home).remove(url)
+    new SignIns(ctx.store.home, ctx.store.box).remove(url)
       ? `Signed out of the relay at ${url}.`
       : `You weren't signed in to the relay at ${url}.`,
   );
@@ -1620,7 +1629,10 @@ async function withRelay<T>(
   credential?: string,
 ): Promise<T> {
   try {
-    credential ??= await signInCredential(new SignIns(ctx.store.home), url);
+    credential ??= await signInCredential(
+      new SignIns(ctx.store.home, ctx.store.box),
+      url,
+    );
   } catch (error) {
     throw new CliError(
       `${(error as Error).message} Run \`blether sign-in ${url}\` to sign in again.`,
