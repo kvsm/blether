@@ -23,6 +23,7 @@ import {
   deleteAgent,
   createInvite,
   createTeam,
+  developerLabels,
   formatInviteLink,
   generateDeviceKey,
   isInviteOpen,
@@ -30,6 +31,7 @@ import {
   removeMember,
   revokeDevice,
   revokeInvite,
+  sameDeveloperName,
   setAgentRoles,
   verifyIdentityLog,
   type Signer,
@@ -79,7 +81,9 @@ const USAGE = `Usage: blether <command>
 Commands:
   init --name <name>                 Create this device's key and your Blether identity
   whoami                             Show your identity
-  team create <name> --relay <url>   Start a team on a relay; you become its Team Admin
+  team create <name> --relay <url> [--as <name>]
+                                     Start a team on a relay; you become its Team Admin.
+                                     --as picks your local name for it
   team list                          List the teams you belong to
   team members <team>                Show a team's members and open invites
   team remove <team> <developer>     Team Admin only: remove a developer and their agents
@@ -564,16 +568,19 @@ async function teamCreate(args: string[], ctx: CliContext): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { relay: { type: "string" } },
+    options: { relay: { type: "string" }, as: { type: "string" } },
   });
   const name = parseTeamName(positionals[0]);
+  const localName = values.as === undefined ? name : parseTeamName(values.as);
   if (!values.relay) {
     throw new CliError(
       "Say which relay hosts the team: blether team create <name> --relay wss://relay.example.com",
     );
   }
-  if (ctx.teams.get(name)) {
-    throw new CliError(`You already have a team called ${name}.`);
+  if (ctx.teams.get(localName)) {
+    throw new CliError(
+      `You already have a team called ${localName}. Pick another local name with --as <name>.`,
+    );
   }
   const credentials = loadCredentials(ctx.store);
   const signer = toSigner(credentials);
@@ -581,9 +588,10 @@ async function teamCreate(args: string[], ctx: CliContext): Promise<number> {
   const { team } = await withRelay(ctx, values.relay, credentials, (relay) =>
     relay.createTeam(createTeam(name, signer, now(ctx))),
   );
-  ctx.teams.save({ name, id: team.id, relayUrl: values.relay });
-  ctx.io.out(`Created team ${name}. You are its Team Admin.`);
-  ctx.io.out(`Invite teammates with: blether invite ${name}`);
+  ctx.teams.save({ name: localName, id: team.id, relayUrl: values.relay });
+  const yours = localName === name ? "" : ` (yours as ${localName})`;
+  ctx.io.out(`Created team ${name}${yours}. You are its Team Admin.`);
+  ctx.io.out(`Invite teammates with: blether invite ${localName}`);
   return 0;
 }
 
@@ -607,16 +615,17 @@ async function teamMembers(args: string[], ctx: CliContext): Promise<number> {
     (relay) => relay.getTeam(record.id),
   );
 
+  const labels = developerLabels(identities.values());
   ctx.io.out(`Team ${team.name}:`);
   for (const member of team.members) {
-    const name = identities.get(member)?.name ?? "(unknown)";
+    const name = labels.get(member) ?? "(unknown)";
     ctx.io.out(`  ${name}${member === team.admin ? " (Team Admin)" : ""}`);
   }
   const open = team.invites.filter((i) => isInviteOpen(i, now(ctx)));
   if (open.length > 0) {
     ctx.io.out("Open invites:");
     for (const i of open) {
-      const by = identities.get(i.invitedBy)?.name ?? "(unknown)";
+      const by = labels.get(i.invitedBy) ?? "(unknown)";
       ctx.io.out(`  ${i.id}  by ${by}, expires ${i.expiresAt}`);
     }
   }
@@ -966,7 +975,7 @@ async function teamRemove(args: string[], ctx: CliContext): Promise<number> {
       // A developer is named by their name, or the start of their identity id.
       const matches = team.members.filter(
         (id) =>
-          identities.get(id)?.name === who ||
+          sameDeveloperName(identities.get(id)?.name ?? "", who) ||
           (who.length >= 8 && id.startsWith(who)),
       );
       if (matches.length === 0) {
@@ -982,7 +991,7 @@ async function teamRemove(args: string[], ctx: CliContext): Promise<number> {
         throw new CliError("The Team Admin can't remove themselves.");
       }
       const agents = team.agents.filter((a) => a.owner === member);
-      const name = identities.get(member)?.name ?? member;
+      const name = developerLabels(identities.values()).get(member) ?? member;
       if (
         !(await confirm(
           ctx,
@@ -1229,9 +1238,10 @@ async function agentList(args: string[], ctx: CliContext): Promise<number> {
       `${record.name} has no agents yet. Create one with: blether agent create ${record.name} <agent name>`,
     );
   } else {
+    const labels = developerLabels(identities.values());
     ctx.io.out(`Agents in ${record.name}:`);
     for (const agent of team.agents) {
-      const owner = identities.get(agent.owner)?.name ?? "(unknown)";
+      const owner = labels.get(agent.owner) ?? "(unknown)";
       const roles =
         agent.roles.length > 0 ? agent.roles.join(", ") : "no roles";
       const presence = online.includes(agent.name) ? "online" : "offline";
@@ -1309,9 +1319,17 @@ async function join(args: string[], ctx: CliContext): Promise<number> {
     link.relayUrl,
     credentials,
     async (relay) => {
-      const { team } = await relay.getTeam(link.teamId);
+      const { team, identities } = await relay.getTeam(link.teamId);
       if (team.members.includes(signer.identity.id)) {
         throw new CliError(`You're already a member of ${team.name}.`);
+      }
+      const namesake = team.members
+        .map((id) => identities.get(id))
+        .find((m) => m && sameDeveloperName(m.name, signer.identity.name));
+      if (namesake) {
+        throw new CliError(
+          `${team.name} already has a member called ${namesake.name}. Names in a team must be unique, ignoring case, so you can't join it as ${signer.identity.name}.`,
+        );
       }
       const name =
         values.as === undefined ? team.name : parseTeamName(values.as);

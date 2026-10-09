@@ -184,6 +184,74 @@ describe("teams through the blether CLI", () => {
     );
   });
 
+  it("creates a team under another local name when the team's name is taken", async () => {
+    await kev.run("team", "create", "backend", "--relay", relay.url);
+    const other = await startRelay();
+    cleanups.push(other.close);
+
+    const clash = await kev.run(
+      "team",
+      "create",
+      "backend",
+      "--relay",
+      other.url,
+    );
+    expect(clash.code).toBe(1);
+    expect(clash.err).toContain("--as");
+
+    const taken = await kev.run(
+      "team",
+      "create",
+      "backend",
+      "--relay",
+      other.url,
+      "--as",
+      "backend",
+    );
+    expect(taken.code).toBe(1);
+
+    const created = await kev.run(
+      "team",
+      "create",
+      "backend",
+      "--relay",
+      other.url,
+      "--as",
+      "home-backend",
+    );
+    expect(created).toMatchObject({ code: 0 });
+    expect(created.out).toContain(
+      "Created team backend (yours as home-backend)",
+    );
+    const record = kev.teams.get("home-backend")!;
+    expect(record.relayUrl).toBe(other.url);
+    expect(record.id).not.toBe(kev.teams.get("backend")!.id);
+
+    expect((await kev.run("team", "members", "home-backend")).out).toBe(
+      "Team backend:\n  Kev (Team Admin)",
+    );
+    expect(
+      await kev.run("agent", "create", "home-backend", "web"),
+    ).toMatchObject({ code: 0 });
+    const invite = await kev.invite("home-backend");
+    expect(await carol.run("join", invite)).toMatchObject({ code: 0 });
+    expect(carol.teams.get("backend")?.id).toBe(record.id);
+  });
+
+  it("refuses to join a team that has a member with the same name, ignoring case", async () => {
+    const otherKev = device(root, "other-kev");
+    await otherKev.run("init", "--name", "KEV");
+    await kev.run("team", "create", "backend", "--relay", relay.url);
+    const invite = await kev.invite("backend");
+
+    const result = await otherKev.run("join", invite);
+
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("backend already has a member called Kev");
+    expect(otherKev.asked).toEqual([]);
+    expect(otherKev.teams.get("backend")).toBeUndefined();
+  });
+
   it("explains what to do when a command is missing something", async () => {
     expect((await kev.run("team", "create", "backend")).err).toContain(
       "--relay",

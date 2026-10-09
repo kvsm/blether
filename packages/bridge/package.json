@@ -1,6 +1,6 @@
 {
   "name": "@blether/bridge",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "license": "MIT",
   "description": "The local side of Blether: the bridge (an MCP server connecting an agent session to a relay) and the blether CLI.",

@@ -1,6 +1,6 @@
 {
   "name": "@blether/relay",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "license": "MIT",
   "description": "Self-hostable server that holds mailboxes and carries messages between a team's bridges.",
