@@ -64,7 +64,10 @@ async function fakeRelay(answers: {
         for (const message of answers.deliver ?? []) {
           send({ type: "deliver", message });
         }
-        if (answers.caughtUpAfterMs !== undefined) {
+        // At 0, send it straight after the deliveries, as the real relay
+        // does: a timer could let a reply to a later request overtake it.
+        if (answers.caughtUpAfterMs === 0) send({ type: "caught-up" });
+        else if (answers.caughtUpAfterMs !== undefined) {
           setTimeout(
             () => send({ type: "caught-up" }),
             answers.caughtUpAfterMs,
