@@ -121,7 +121,7 @@ To use Blether on another of your devices, [add the device](#your-devices) to yo
 One developer creates the team, becoming its **Team Admin**, and invites the others:
 
 ```sh
-blether team create <team> --relay ws://127.0.0.1:7357   # or wss://relay.example.com
+blether team create <team> --relay ws://127.0.0.1:7357   # or wss://relay.example.com; --as <name> picks your own local name
 blether invite <team>                  # a one-use invite link, valid for 72 hours
 ```
 
