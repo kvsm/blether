@@ -1035,6 +1035,29 @@ describe("relay invite expiry", () => {
   });
 });
 
+describe("relay member names", () => {
+  const { ctx, cli, append } = useRelay();
+
+  it("refuses a join by a developer whose name a member already has, ignoring case", async () => {
+    const otherBob = newDeveloper("BOB");
+    const { entry, invite, secret } = createInvite(ctx.team, alice.signer);
+    await append(entry, alice);
+    const session = await cli(otherBob);
+
+    expect(
+      await session.teamRequest({
+        type: "append-team",
+        team: ctx.team.id,
+        entry: acceptInvite(ctx.team, invite, secret, otherBob.signer),
+      }),
+    ).toMatchObject({
+      type: "error",
+      code: "team-rejected",
+      message: expect.stringContaining("already has a member called Bob"),
+    });
+  });
+});
+
 // A database on disk is slow on Windows CI runners, so allow more time.
 describe("relay persistence", { timeout: 20_000 }, () => {
   let dir: string;

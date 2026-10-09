@@ -76,6 +76,30 @@ export interface Identity {
   revoked: { key: PublicKey; revokedAt: string }[];
 }
 
+/** Whether two developer names count as the same. A team's members must all have different names, ignoring case. */
+export function sameDeveloperName(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * How to show each of `identities`, keyed by identity id: their name, plus
+ * the start of their identity id if another of them has the same name. Teams
+ * from before names had to differ can still have two.
+ */
+export function developerLabels(
+  identities: Iterable<Identity>,
+): Map<string, string> {
+  const all = [...identities];
+  return new Map(
+    all.map(({ id, name }) => [
+      id,
+      all.some((o) => o.id !== id && sameDeveloperName(o.name, name))
+        ? `${name} (${id.slice(0, 8)})`
+        : name,
+    ]),
+  );
+}
+
 export class IdentityError extends Error {
   constructor(message: string) {
     super(message);
