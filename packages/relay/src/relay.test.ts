@@ -906,13 +906,32 @@ describe("relay invite expiry", () => {
   });
 });
 
-describe("relay persistence", () => {
+// A database on disk is slow on Windows CI runners, so allow more time.
+describe("relay persistence", { timeout: 20_000 }, () => {
   let dir: string;
+  const open = new Set<Relay>();
+
+  /** Starts a relay that afterEach closes if the test doesn't. */
+  const startRelayOn = async (databasePath: string): Promise<Relay> => {
+    const relay = await startRelay({ databasePath });
+    open.add(relay);
+    return {
+      ...relay,
+      close: () => {
+        open.delete(relay);
+        return relay.close();
+      },
+    };
+  };
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "blether-relay-"));
   });
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    // Close the database first: Windows can't remove a file that's open.
+    await Promise.all([...open].map((relay) => relay.close()));
+    open.clear();
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
   });
 
   it("keeps teams and mailboxes across a restart", async () => {
@@ -922,7 +941,7 @@ describe("relay persistence", () => {
     log.push(createAgent(verify(log), "api", [], alice.signer));
     log.push(createAgent(verify(log), "web", [], alice.signer));
 
-    const before = await startRelay({ databasePath });
+    const before = await startRelayOn(databasePath);
     const admin = await TestClient.connect(before.url);
     await admin.hello({});
     await admin.teamRequest({ type: "create-team", log: log.slice(0, 1) });
@@ -939,16 +958,12 @@ describe("relay persistence", () => {
     await web.close();
     await before.close();
 
-    const after = await startRelay({ databasePath });
-    try {
-      const apiAgain = await TestClient.connect(after.url);
-      await apiAgain.hello({ team, agent: "api" });
-      const { message } = await apiAgain.next("deliver");
-      expect(message.id).toBe(id);
-      expect(textOf(message)).toBe("survive the restart");
-      await apiAgain.close();
-    } finally {
-      await after.close();
-    }
+    const after = await startRelayOn(databasePath);
+    const apiAgain = await TestClient.connect(after.url);
+    await apiAgain.hello({ team, agent: "api" });
+    const { message } = await apiAgain.next("deliver");
+    expect(message.id).toBe(id);
+    expect(textOf(message)).toBe("survive the restart");
+    await apiAgain.close();
   });
 });
