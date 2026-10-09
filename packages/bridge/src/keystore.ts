@@ -18,6 +18,12 @@ import {
   type DeviceKey,
 } from "@blether/protocol";
 import { z } from "zod";
+import {
+  LostStorageKeyError,
+  SecretBox,
+  isSealed,
+  platformKeychain,
+} from "./storage-key.js";
 
 /** What a bridge needs to prove who it is: this device's key and its developer's identity log. */
 export interface Credentials {
@@ -48,13 +54,29 @@ export class OutdatedBletherHomeError extends Error {
   }
 }
 
+/** This device's key is encrypted, and its storage key can't be read or is gone. */
+export class UndecryptableDeviceKeyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UndecryptableDeviceKeyError";
+  }
+}
+
 /**
  * Stores credentials as files in a directory readable only by the current
  * user (ADR 0006). On Windows, the directory under the user profile is
  * already private to the user; POSIX permissions are set explicitly.
+ * Device secret keys are encrypted under a storage key the OS keeps, where
+ * there's a keychain (ADR 0011).
  */
 export class FileKeyStore {
-  constructor(readonly home: string = defaultBletherHome()) {}
+  constructor(
+    readonly home: string = defaultBletherHome(),
+    private readonly box = new SecretBox(
+      platformKeychain(home),
+      process.env.BLETHER_KEYCHAIN !== "off",
+    ),
+  ) {}
 
   private get devicePath() {
     return join(this.home, "device-key.json");
@@ -88,7 +110,7 @@ export class FileKeyStore {
     if (existsSync(this.legacyPath)) {
       throw new OutdatedBletherHomeError(this.home);
     }
-    const device = DeviceKeyFile.parse(readJson(this.devicePath));
+    const device = this.readDeviceKey(this.devicePath);
     const identity = IdentityLog.parse(readJson(this.identityPath));
     if (!verifyIdentityLog(identity).devices.includes(device.publicKey)) {
       throw new Error(
@@ -100,7 +122,7 @@ export class FileKeyStore {
 
   save(credentials: Credentials): void {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
-    writePrivate(this.devicePath, credentials.device);
+    this.writeDeviceKey(this.devicePath, credentials.device);
     writePrivate(this.identityPath, credentials.identity);
   }
 
@@ -111,13 +133,13 @@ export class FileKeyStore {
 
   loadPendingDevice(): DeviceKey | undefined {
     return existsSync(this.pendingPath)
-      ? DeviceKeyFile.parse(readJson(this.pendingPath))
+      ? this.readDeviceKey(this.pendingPath)
       : undefined;
   }
 
   savePendingDevice(device: DeviceKey): void {
     mkdirSync(this.home, { recursive: true, mode: 0o700 });
-    writePrivate(this.pendingPath, device);
+    this.writeDeviceKey(this.pendingPath, device);
   }
 
   /** Turns the pending device key into this device's key, with `identity` as its identity. */
@@ -131,6 +153,65 @@ export class FileKeyStore {
     this.save(credentials);
     rmSync(this.pendingPath);
     return credentials;
+  }
+
+  /**
+   * Encrypts device keys stored as they are, now there's a keychain. Returns
+   * the keychain's name if it encrypted any.
+   */
+  encryptStoredKeys(): string | undefined {
+    let encrypted = false;
+    for (const path of [this.devicePath, this.pendingPath]) {
+      if (!existsSync(path)) continue;
+      const file = DeviceKeyFile.parse(readJson(path));
+      if (isSealed(file.secretKey)) continue;
+      const secretKey = this.box.seal(file.secretKey);
+      if (!isSealed(secretKey)) return undefined;
+      writePrivate(path, { ...file, secretKey });
+      encrypted = true;
+    }
+    return encrypted ? this.box.keychain?.name : undefined;
+  }
+
+  /** How this device's key (or its pending key) is kept, for the developer. */
+  keyProtection(): string {
+    const path = existsSync(this.devicePath)
+      ? this.devicePath
+      : this.pendingPath;
+    const { secretKey } = DeviceKeyFile.parse(readJson(path));
+    if (isSealed(secretKey)) {
+      return `encrypted, with its storage key in ${this.box.keychain?.name}`;
+    }
+    const why = this.box.unavailable
+      ? ` (no keychain: ${this.box.unavailable})`
+      : "";
+    return `in a file only you can read${why}`;
+  }
+
+  private readDeviceKey(path: string): DeviceKey {
+    const file = DeviceKeyFile.parse(readJson(path));
+    try {
+      return { ...file, secretKey: this.box.open(file.secretKey) };
+    } catch (error) {
+      if (!(error instanceof LostStorageKeyError)) {
+        throw new UndecryptableDeviceKeyError(
+          `The device key in ${path} can't be decrypted. ${(error as Error).message}`,
+        );
+      }
+      throw new UndecryptableDeviceKeyError(
+        `The device key in ${path} can't be decrypted. ${error.message} ` +
+          "That happens if the keychain was reset, or on Windows if an administrator reset your password, and the key can't be recovered. " +
+          `Move ${this.home} aside, then run \`blether device request\` and approve this device from another of yours, ` +
+          "or, if this was your only device, run `blether init` and ask to be invited to your teams again.",
+      );
+    }
+  }
+
+  private writeDeviceKey(path: string, device: DeviceKey) {
+    writePrivate(path, {
+      publicKey: device.publicKey,
+      secretKey: this.box.seal(device.secretKey),
+    });
   }
 }
 

@@ -39,6 +39,7 @@ import {
 } from "@blether/protocol";
 import {
   FileKeyStore,
+  UndecryptableDeviceKeyError,
   OutdatedBletherHomeError,
   SeenLogs,
   SignIns,
@@ -198,6 +199,7 @@ export async function runCli(
       : {}),
   };
   try {
+    encryptStoredKeys(ctx);
     return await dispatch(argv, ctx);
   } catch (error) {
     const code = (error as { code?: unknown }).code;
@@ -211,12 +213,27 @@ export async function runCli(
       error instanceof RelayError ||
       error instanceof InviteLinkError ||
       error instanceof PairingError ||
-      error instanceof OutdatedBletherHomeError
+      error instanceof OutdatedBletherHomeError ||
+      error instanceof UndecryptableDeviceKeyError
     ) {
       ctx.io.err(error.message);
       return 1;
     }
     throw error;
+  }
+}
+
+/** Encrypts a device key stored as it is, once there's a keychain (ADR 0011). */
+function encryptStoredKeys({ store, io }: CliContext) {
+  let keychain;
+  try {
+    keychain = store.encryptStoredKeys();
+  } catch {
+    // The command reports a key it can't read.
+    return;
+  }
+  if (keychain) {
+    io.err(`Encrypted your device key, with its storage key in ${keychain}.`);
   }
 }
 
@@ -339,6 +356,7 @@ function init(args: string[], { store, io }: CliContext): number {
   io.out(`Created identity for ${name.data}.`);
   io.out(`Identity: ${id}`);
   io.out(`Keys stored in ${store.home}. Keep this directory private.`);
+  io.out(`Your device key is ${store.keyProtection()}.`);
   return 0;
 }
 
@@ -348,6 +366,7 @@ function whoami({ store, io }: CliContext): number {
   io.out(`Name:     ${identity.name}`);
   io.out(`Identity: ${identity.id}`);
   io.out(`Device:   ${deviceFingerprint(credentials.device.publicKey)}`);
+  io.out(`Key:      ${store.keyProtection()}`);
   const signIns = new SignIns(store.home).list();
   if (signIns.length > 0) {
     io.out("Signed in to:");
@@ -498,6 +517,7 @@ function deviceRequest({ store, io }: CliContext): number {
   io.out(
     `It will show this fingerprint. Check it matches: ${deviceFingerprint(device.publicKey)}`,
   );
+  io.out(`This device's key is ${store.keyProtection()}.`);
   return 0;
 }
 
