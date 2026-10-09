@@ -6,6 +6,7 @@ import {
   heldMessageId,
   holdNoticeBody,
   compareLogs,
+  developerLabels,
   openMessage,
   parseFrame,
   sealMessage,
@@ -761,9 +762,10 @@ export class RelayConnection {
       this.currentTeam(true),
       this.getPresence(scope.team),
     ]);
+    const labels = developerLabels(identities.values());
     return team.agents.map((agent) => ({
       name: agent.name,
-      developer: identities.get(agent.owner)?.name ?? "(unknown)",
+      developer: labels.get(agent.owner) ?? "(unknown)",
       roles: agent.roles,
       online: online.includes(agent.name),
       replacesDeleted: agent.replacesDeleted === true,

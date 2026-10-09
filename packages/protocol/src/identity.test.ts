@@ -10,6 +10,8 @@ import {
 import {
   IdentityError,
   createIdentity,
+  developerLabels,
+  sameDeveloperName,
   verifyIdentityLog,
   type IdentityLog,
 } from "./identity.js";
@@ -104,6 +106,29 @@ describe("identity", () => {
   it("rejects malformed logs", () => {
     expect(() => verifyIdentityLog([])).toThrow(/malformed/);
     expect(() => verifyIdentityLog("nope")).toThrow(/malformed/);
+  });
+});
+
+describe("developer names", () => {
+  const named = (name: string) =>
+    verifyIdentityLog(createIdentity(generateDeviceKey(), name));
+
+  it("count as the same ignoring case", () => {
+    expect(sameDeveloperName("Kev", "kEV")).toBe(true);
+    expect(sameDeveloperName("Kev", "Kevin")).toBe(false);
+  });
+
+  it("are shown as they are unless another developer has the same one", () => {
+    const kev = named("Kev");
+    const kevAgain = named("KEV");
+    const carol = named("Carol");
+
+    const labels = developerLabels([kev, kevAgain, carol]);
+
+    expect(labels.get(carol.id)).toBe("Carol");
+    expect(labels.get(kev.id)).toBe(`Kev (${kev.id.slice(0, 8)})`);
+    expect(labels.get(kevAgain.id)).toBe(`KEV (${kevAgain.id.slice(0, 8)})`);
+    expect(developerLabels([kev, carol]).get(kev.id)).toBe("Kev");
   });
 });
 

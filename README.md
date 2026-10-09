@@ -114,6 +114,8 @@ Once per developer, on your first device:
 blether init --name <name>             # creates your identity in ~/.blether
 ```
 
+Your name is how teammates and their agents tell you apart, and you can't change it later. Members of a team must all have different names, ignoring case, so pick one that's unique among your teammates, such as your full name.
+
 To use Blether on another of your devices, [add the device](#your-devices) to your identity instead of running `init` there.
 
 ### 4. Create or join a team
