@@ -8,6 +8,7 @@ import {
   compareLogs,
   parseFrame,
   randomToken,
+  sameDeveloperName,
   verifyChallenge,
   verifyIdentityLog,
   verifyTeamLog,
@@ -442,6 +443,21 @@ export async function startRelay(options: RelayOptions = {}): Promise<Relay> {
               fail(
                 "team-rejected",
                 "This invite has expired.",
+                frame.requestId,
+              );
+              return;
+            }
+            // Checked here, not in the log's rules, so teams that already
+            // have two members with the same name still verify.
+            const { name } = developer;
+            const namesake = store
+              .developerLogs(before.members)
+              .map((log) => verifyIdentityLog(log))
+              .find((m) => sameDeveloperName(m.name, name));
+            if (namesake) {
+              fail(
+                "team-rejected",
+                `${before.name} already has a member called ${namesake.name}. Names in a team must be unique, ignoring case.`,
                 frame.requestId,
               );
               return;
