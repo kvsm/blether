@@ -17,7 +17,8 @@ const dist = join(dirname(fileURLToPath(import.meta.url)), "plugin", "dist");
 const root = mkdtempSync(join(tmpdir(), "blether-package-"));
 const home = join(root, "home");
 const project = join(root, "project");
-const env = { ...process.env, BLETHER_HOME: home };
+// Not the keychain: the check is that the bundles run, and CI runners may have none.
+const env = { ...process.env, BLETHER_HOME: home, BLETHER_KEYCHAIN: "off" };
 // Asynchronous, since the relay runs in this process and must keep answering.
 const blether = (...args) =>
   run(process.execPath, [join(dist, "cli.js"), ...args], { env });
