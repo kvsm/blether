@@ -79,7 +79,9 @@ const USAGE = `Usage: blether <command>
 Commands:
   init --name <name>                 Create this device's key and your Blether identity
   whoami                             Show your identity
-  team create <name> --relay <url>   Start a team on a relay; you become its Team Admin
+  team create <name> --relay <url> [--as <name>]
+                                     Start a team on a relay; you become its Team Admin.
+                                     --as picks your local name for it
   team list                          List the teams you belong to
   team members <team>                Show a team's members and open invites
   team remove <team> <developer>     Team Admin only: remove a developer and their agents
@@ -564,16 +566,19 @@ async function teamCreate(args: string[], ctx: CliContext): Promise<number> {
   const { values, positionals } = parseArgs({
     args,
     allowPositionals: true,
-    options: { relay: { type: "string" } },
+    options: { relay: { type: "string" }, as: { type: "string" } },
   });
   const name = parseTeamName(positionals[0]);
+  const localName = values.as === undefined ? name : parseTeamName(values.as);
   if (!values.relay) {
     throw new CliError(
       "Say which relay hosts the team: blether team create <name> --relay wss://relay.example.com",
     );
   }
-  if (ctx.teams.get(name)) {
-    throw new CliError(`You already have a team called ${name}.`);
+  if (ctx.teams.get(localName)) {
+    throw new CliError(
+      `You already have a team called ${localName}. Pick another local name with --as <name>.`,
+    );
   }
   const credentials = loadCredentials(ctx.store);
   const signer = toSigner(credentials);
@@ -581,9 +586,10 @@ async function teamCreate(args: string[], ctx: CliContext): Promise<number> {
   const { team } = await withRelay(ctx, values.relay, credentials, (relay) =>
     relay.createTeam(createTeam(name, signer, now(ctx))),
   );
-  ctx.teams.save({ name, id: team.id, relayUrl: values.relay });
-  ctx.io.out(`Created team ${name}. You are its Team Admin.`);
-  ctx.io.out(`Invite teammates with: blether invite ${name}`);
+  ctx.teams.save({ name: localName, id: team.id, relayUrl: values.relay });
+  const yours = localName === name ? "" : ` (yours as ${localName})`;
+  ctx.io.out(`Created team ${name}${yours}. You are its Team Admin.`);
+  ctx.io.out(`Invite teammates with: blether invite ${localName}`);
   return 0;
 }
 
