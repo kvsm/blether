@@ -129,7 +129,7 @@ describe("blether CLI", () => {
 
     expect(await run("whoami")).toBe(0);
     expect(err).toEqual([
-      "Encrypted your device key, with its storage key in the test keychain.",
+      "Encrypted your device key, with the storage key in the test keychain.",
     ]);
     expect(out).toContain(
       "Key:      encrypted, with its storage key in the test keychain",

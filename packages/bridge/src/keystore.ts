@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   IdentityLog,
   PublicKey,
@@ -54,6 +54,25 @@ export class OutdatedBletherHomeError extends Error {
   }
 }
 
+const boxes = new Map<string, SecretBox>();
+
+/**
+ * The box for `home`'s secrets, using the platform's keychain unless
+ * `BLETHER_KEYCHAIN=off`. One per home, so a process reads its storage key once.
+ */
+function defaultSecretBox(home: string): SecretBox {
+  const key = resolve(home);
+  let box = boxes.get(key);
+  if (!box) {
+    box = new SecretBox(
+      platformKeychain(home),
+      process.env.BLETHER_KEYCHAIN !== "off",
+    );
+    boxes.set(key, box);
+  }
+  return box;
+}
+
 /** This device's key is encrypted, and its storage key can't be read or is gone. */
 export class UndecryptableDeviceKeyError extends Error {
   constructor(message: string) {
@@ -72,10 +91,7 @@ export class UndecryptableDeviceKeyError extends Error {
 export class FileKeyStore {
   constructor(
     readonly home: string = defaultBletherHome(),
-    private readonly box = new SecretBox(
-      platformKeychain(home),
-      process.env.BLETHER_KEYCHAIN !== "off",
-    ),
+    readonly box = defaultSecretBox(home),
   ) {}
 
   private get devicePath() {
@@ -246,24 +262,87 @@ const relayKey = (url: string) => new URL(url).href.replace(/\/$/, "");
 
 /**
  * The credential this device signs in to each relay with, in a file readable
- * only by the current user, next to the device key.
+ * only by the current user, next to the device key. Credentials and refresh
+ * tokens are encrypted like the device key (ADR 0011).
  */
 export class SignIns {
-  constructor(readonly home: string = defaultBletherHome()) {}
+  constructor(
+    readonly home: string = defaultBletherHome(),
+    private readonly box = defaultSecretBox(home),
+  ) {}
 
   private get path() {
     return join(this.home, "sign-ins.json");
   }
 
+  /** Every sign-in, as stored: secrets may be encrypted. */
   private read(): Record<string, SignIn> {
     return existsSync(this.path)
       ? z.record(z.string(), SignIn).parse(readJson(this.path))
       : {};
   }
 
-  /** This device's sign-in to the relay at `url`, if it has one. */
+  private write(all: Record<string, SignIn>) {
+    mkdirSync(this.home, { recursive: true, mode: 0o700 });
+    writePrivate(this.path, all);
+  }
+
+  /**
+   * This device's sign-in to the relay at `url`, if it has one. One whose
+   * storage key is lost counts as none: signing in again replaces it.
+   */
   get(url: string): SignIn | undefined {
-    return this.read()[relayKey(url)];
+    const stored = this.read()[relayKey(url)];
+    if (!stored) return undefined;
+    try {
+      return this.transform(stored, (secret) => this.box.open(secret));
+    } catch (error) {
+      if (error instanceof LostStorageKeyError) return undefined;
+      throw new Error(
+        `Your sign-in to ${relayKey(url)} can't be decrypted. ${(error as Error).message}`,
+        { cause: error },
+      );
+    }
+  }
+
+  /** `signIn` with `change` applied to its secrets. */
+  private transform(
+    signIn: SignIn,
+    change: (secret: string) => string,
+  ): SignIn {
+    const credential = change(signIn.credential);
+    if (signIn.kind === "token") return { ...signIn, credential };
+    const { refreshToken } = signIn;
+    return {
+      ...signIn,
+      credential,
+      ...(refreshToken ? { refreshToken: change(refreshToken) } : {}),
+    };
+  }
+
+  /**
+   * Encrypts sign-ins stored as they are, now there's a keychain. Returns the
+   * keychain's name if it encrypted any.
+   */
+  encryptStored(): string | undefined {
+    const all = this.read();
+    const plain = Object.entries(all).filter(
+      ([, signIn]) =>
+        !isSealed(signIn.credential) ||
+        (signIn.kind === "oidc" &&
+          signIn.refreshToken !== undefined &&
+          !isSealed(signIn.refreshToken)),
+    );
+    if (plain.length === 0) return undefined;
+    for (const [url, signIn] of plain) {
+      const sealed = this.transform(signIn, (secret) =>
+        isSealed(secret) ? secret : this.box.seal(secret),
+      );
+      if (!isSealed(sealed.credential)) return undefined;
+      all[url] = sealed;
+    }
+    this.write(all);
+    return this.box.keychain?.name;
   }
 
   /**
@@ -275,8 +354,8 @@ export class SignIns {
   }
 
   save(url: string, signIn: SignIn): void {
-    mkdirSync(this.home, { recursive: true, mode: 0o700 });
-    writePrivate(this.path, { ...this.read(), [relayKey(url)]: signIn });
+    const sealed = this.transform(signIn, (secret) => this.box.seal(secret));
+    this.write({ ...this.read(), [relayKey(url)]: sealed });
   }
 
   /** Forgets the sign-in for `url`. Returns false if there wasn't one. */
@@ -284,7 +363,7 @@ export class SignIns {
     const all = this.read();
     if (!(relayKey(url) in all)) return false;
     delete all[relayKey(url)];
-    writePrivate(this.path, all);
+    this.write(all);
     return true;
   }
 

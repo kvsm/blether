@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createIdentity, generateDeviceKey } from "@blether/protocol";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { FileKeyStore, UndecryptableDeviceKeyError } from "./keystore.js";
+import {
+  FileKeyStore,
+  SignIns,
+  UndecryptableDeviceKeyError,
+} from "./keystore.js";
 import {
   type Keychain,
   LostStorageKeyError,
@@ -180,6 +184,71 @@ describe("FileKeyStore with a keychain", () => {
     expect((error as Error).message).toMatch(
       /no longer in the test keychain.*blether device request.*blether init/,
     );
+  });
+});
+
+describe("SignIns with a keychain", () => {
+  let home: string;
+  let keychain: TestKeychain;
+  const signIns = (sealing = true) =>
+    new SignIns(home, new SecretBox(keychain, sealing));
+  const file = () => readFileSync(join(home, "sign-ins.json"), "utf8");
+  const relay = "wss://relay.example";
+  const oidc = {
+    kind: "oidc" as const,
+    credential: "the-access-token",
+    refreshToken: "the-refresh-token",
+    access: { issuer: "https://idp.example", clientId: "app", scopes: [] },
+    signedInAt: "2026-10-09T12:00:00.000Z",
+  };
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "blether-keychain-"));
+    keychain = new TestKeychain();
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("stores the credential and refresh token encrypted, and reads them", () => {
+    signIns().save(relay, oidc);
+    expect(file()).not.toContain("the-access-token");
+    expect(file()).not.toContain("the-refresh-token");
+    expect(file()).toContain("https://idp.example");
+    expect(signIns().get(relay)).toEqual(oidc);
+    expect(signIns().credential(relay)).toBe("the-access-token");
+  });
+
+  it("lists and removes sign-ins without the keychain", () => {
+    signIns().save(relay, oidc);
+    keychain.failure = "the keychain is locked";
+    expect(signIns().list()).toEqual([
+      { url: relay, kind: "oidc", signedInAt: oidc.signedInAt },
+    ]);
+    expect(signIns().remove(relay)).toBe(true);
+  });
+
+  it("encrypts sign-ins stored as they are, once there's a keychain", () => {
+    signIns(false).save(relay, oidc);
+    signIns(false).save("wss://other.example", {
+      kind: "token",
+      credential: "operator-token",
+      signedInAt: oidc.signedInAt,
+    });
+    expect(file()).toContain("the-refresh-token");
+    expect(signIns(false).encryptStored()).toBeUndefined();
+    expect(signIns().encryptStored()).toBe("the test keychain");
+    expect(file()).not.toContain("the-refresh-token");
+    expect(file()).not.toContain("operator-token");
+    expect(signIns().encryptStored()).toBeUndefined();
+    expect(signIns().get(relay)).toEqual(oidc);
+    expect(signIns().credential("wss://other.example")).toBe("operator-token");
+  });
+
+  it("counts a sign-in whose storage key is lost as none", () => {
+    signIns().save(relay, oidc);
+    keychain.key = randomBytes(32);
+    expect(signIns().get(relay)).toBeUndefined();
   });
 });
 
